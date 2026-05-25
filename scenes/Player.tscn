@@ -1,0 +1,110 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/Player.gd" id="player_script_id"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_1"]
+radius = 0.4
+height = 1.8
+
+[sub_resource type="SphereMesh" id="SphereMesh_1"]
+radius = 0.4
+height = 0.8
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_part"]
+transparency = 1
+blend_mode = 1
+shading_mode = 0
+vertex_color_use_as_albedo = true
+billboard_mode = 3
+particles_anim_h_frames = 1
+particles_anim_v_frames = 1
+particles_anim_loop = false
+
+[sub_resource type="QuadMesh" id="QuadMesh_part"]
+material = SubResource("StandardMaterial3D_part")
+size = Vector2(0.1, 0.1)
+
+[sub_resource type="Curve" id="Curve_1"]
+_data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(1, 0), -1.5, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_1"]
+properties/0/path = NodePath(".:position")
+properties/0/spawn = true
+properties/0/replication_mode = 1
+properties/1/path = NodePath(".:rotation")
+properties/1/spawn = true
+properties/1/replication_mode = 1
+properties/2/path = NodePath(".:player_id")
+properties/2/spawn = true
+properties/2/replication_mode = 0
+properties/3/path = NodePath(".:player_name")
+properties/3/spawn = true
+properties/3/replication_mode = 0
+properties/4/path = NodePath(".:player_character")
+properties/4/spawn = true
+properties/4/replication_mode = 0
+
+[node name="Player" type="CharacterBody3D" unique_id=184254436]
+script = ExtResource("player_script_id")
+collision_layer = 2
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1270966621]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("CapsuleShape3D_1")
+
+[node name="Visuals" type="Node3D" parent="." unique_id=1011361345]
+
+[node name="PlasmaMesh" type="MeshInstance3D" parent="Visuals" unique_id=576082652]
+mesh = SubResource("SphereMesh_1")
+skeleton = NodePath("../..")
+
+[node name="OmniLight3D" type="OmniLight3D" parent="Visuals" unique_id=1900608477]
+light_energy = 3.0
+omni_range = 10.0
+
+[node name="Particles" type="CPUParticles3D" parent="Visuals" unique_id=1425974483]
+amount = 25
+lifetime = 0.8
+mesh = SubResource("QuadMesh_part")
+emission_shape = 1
+emission_sphere_radius = 0.3
+direction = Vector3(0, 1, 0)
+spread = 20.0
+gravity = Vector3(0, 0.3, 0)
+initial_velocity_min = 0.1
+initial_velocity_max = 0.3
+scale_amount_curve = SubResource("Curve_1")
+
+[node name="SpringArm3D" type="SpringArm3D" parent="." unique_id=1255604197]
+transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0.6, 1.6, 0)
+spring_length = 2.5
+
+[node name="Camera3D" type="Camera3D" parent="SpringArm3D" unique_id=1697029536]
+
+[node name="CrosshairLayer" type="CanvasLayer" parent="." unique_id=1528974457]
+
+[node name="Crosshair" type="ColorRect" parent="CrosshairLayer" unique_id=498518335]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -1.0
+offset_top = -1.0
+offset_right = 1.0
+offset_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(1, 1, 1, 0.4)
+
+[node name="NameLabel3D" type="Label3D" parent="." unique_id=970729398]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+pixel_size = 0.004
+billboard = 1
+no_depth_test = true
+text = "Player"
+
+[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="." unique_id=577899119]
+replication_config = SubResource("SceneReplicationConfig_1")

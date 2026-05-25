@@ -1,0 +1,45 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/PlayerHUD.gd" id="player_hud_script"]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_p0abl"]
+bg_color = Color(0.8, 0.2, 0.2, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_0kcyj"]
+bg_color = Color(0.2, 0.4, 0.9, 1)
+
+[node name="PlayerHUD" type="CanvasLayer" unique_id=1272828365]
+script = ExtResource("player_hud_script")
+
+[node name="MarginLeft" type="MarginContainer" parent="." unique_id=371267409]
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MarginLeft" unique_id=1518853830]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="HealthBar" type="ProgressBar" parent="MarginLeft/VBoxContainer" unique_id=2013072960]
+custom_minimum_size = Vector2(300, 30)
+layout_mode = 2
+theme_override_styles/fill = SubResource("StyleBoxFlat_p0abl")
+show_percentage = false
+
+[node name="ManaBar" type="ProgressBar" parent="MarginLeft/VBoxContainer" unique_id=1079877]
+custom_minimum_size = Vector2(300, 30)
+layout_mode = 2
+theme_override_styles/fill = SubResource("StyleBoxFlat_0kcyj")
+show_percentage = false
+
+[node name="MarginRight" type="MarginContainer" parent="." unique_id=605656172]
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MarginRight" unique_id=1548308323]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="SpellLabel" type="Label" parent="MarginRight/VBoxContainer" unique_id=1085642474]
+layout_mode = 2
+theme_override_font_sizes/font_size = 28
+theme_override_colors/font_color = Color(1, 0.8, 0.2, 1)
+horizontal_alignment = 2
+
+[node name="CooldownUI" type="Control" parent="." unique_id=30001981]
+layout_mode = 3
+anchors_preset = 0

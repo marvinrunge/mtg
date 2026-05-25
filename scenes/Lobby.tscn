@@ -1,0 +1,148 @@
+[gd_scene load_steps=2 format=3 uid="uid://c1lobby"]
+
+[ext_resource type="Script" path="res://scripts/Lobby.gd" id="1_lobby"]
+
+[node name="Lobby" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_lobby")
+
+[node name="Panel" type="Panel" parent="."]
+self_modulate = Color(0.08, 0.1, 0.16, 1)
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -300.0
+offset_top = -250.0
+offset_right = 300.0
+offset_bottom = 250.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 15
+
+[node name="Title" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0, 0.85, 1, 1)
+theme_override_font_sizes/font_size = 36
+text = "PLASMA MULTIPLAYER"
+horizontal_alignment = 1
+
+[node name="NameLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.85, 0.85, 0.85, 1)
+text = "Player Name:"
+
+[node name="NameInput" type="LineEdit" parent="Panel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+placeholder_text = "Enter Name..."
+text = "Player"
+alignment = 1
+
+[node name="CharacterLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.85, 0.85, 0.85, 1)
+text = "Select Character:"
+
+[node name="CharacterOptionButton" type="OptionButton" parent="Panel/VBoxContainer"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+
+[node name="HSeparator" type="HSeparator" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="NetworkHBox" type="HBoxContainer" parent="Panel/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="HostPanel" type="PanelContainer" parent="Panel/VBoxContainer/NetworkHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel/VBoxContainer/NetworkHBox/HostPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="HostLabel" type="Label" parent="Panel/VBoxContainer/NetworkHBox/HostPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0, 0.85, 1, 1)
+text = "Host Server"
+horizontal_alignment = 1
+
+[node name="PortLabel" type="Label" parent="Panel/VBoxContainer/NetworkHBox/HostPanel/VBoxContainer"]
+layout_mode = 2
+text = "Port:"
+
+[node name="PortInput" type="LineEdit" parent="Panel/VBoxContainer/NetworkHBox/HostPanel/VBoxContainer"]
+layout_mode = 2
+text = "9999"
+alignment = 1
+
+[node name="HostButton" type="Button" parent="Panel/VBoxContainer/NetworkHBox/HostPanel/VBoxContainer"]
+custom_minimum_size = Vector2(0, 45)
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "HOST GAME"
+
+[node name="JoinPanel" type="PanelContainer" parent="Panel/VBoxContainer/NetworkHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel/VBoxContainer/NetworkHBox/JoinPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="JoinLabel" type="Label" parent="Panel/VBoxContainer/NetworkHBox/JoinPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0, 0.85, 1, 1)
+text = "Join Server"
+horizontal_alignment = 1
+
+[node name="IPLabel" type="Label" parent="Panel/VBoxContainer/NetworkHBox/JoinPanel/VBoxContainer"]
+layout_mode = 2
+text = "IP Address:"
+
+[node name="IPInput" type="LineEdit" parent="Panel/VBoxContainer/NetworkHBox/JoinPanel/VBoxContainer"]
+layout_mode = 2
+text = "127.0.0.1"
+alignment = 1
+
+[node name="PortLabel" type="Label" parent="Panel/VBoxContainer/NetworkHBox/JoinPanel/VBoxContainer"]
+layout_mode = 2
+text = "Port:"
+
+[node name="PortInput" type="LineEdit" parent="Panel/VBoxContainer/NetworkHBox/JoinPanel/VBoxContainer"]
+layout_mode = 2
+text = "9999"
+alignment = 1
+
+[node name="JoinButton" type="Button" parent="Panel/VBoxContainer/NetworkHBox/JoinPanel/VBoxContainer"]
+custom_minimum_size = Vector2(0, 45)
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "JOIN GAME"
+
+[node name="StatusLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+text = "Configure character and Host/Join."
+horizontal_alignment = 1
+
+[connection signal="pressed" from="Panel/VBoxContainer/NetworkHBox/HostPanel/VBoxContainer/HostButton" to="." method="_on_host_button_pressed"]
+[connection signal="pressed" from="Panel/VBoxContainer/NetworkHBox/JoinPanel/VBoxContainer/JoinButton" to="." method="_on_join_button_pressed"]
