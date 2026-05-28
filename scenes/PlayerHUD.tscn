@@ -3,9 +3,17 @@
 [ext_resource type="Script" path="res://scripts/PlayerHUD.gd" id="player_hud_script"]
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_p0abl"]
 bg_color = Color(0.8, 0.2, 0.2, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_0kcyj"]
 bg_color = Color(0.2, 0.4, 0.9, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
 
 [node name="PlayerHUD" type="CanvasLayer" unique_id=1272828365]
 script = ExtResource("player_hud_script")

@@ -10,7 +10,7 @@ extends Control
 const CHARACTERS = [
 	"CopperMyr",
 	"Elf",
-	"Goblin1",
+	"Goblin",
 	"GoldMyr",
 	"Krenko",
 	"LodestoneMyr",

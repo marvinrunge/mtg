@@ -17,7 +17,13 @@ var music_cache: Dictionary = {
 @onready var wave_label = $HUD/MarginContainer/VBoxContainer/WaveLabel
 @onready var enemies_container = $EnemiesContainer
 
-var settings_container: VBoxContainer
+var esc_menu_container: Control
+var esc_main_menu: VBoxContainer
+var audio_settings_menu: VBoxContainer
+var controls_menu: VBoxContainer
+var player_info_panel: PanelContainer
+var player_info_rt: RichTextLabel
+var ping_timer: float = 0.0
 
 var current_wave = 0
 var wave_active = false
@@ -53,10 +59,10 @@ const SPAWN_POINTS = [
 func _ready():
 	setup_world()
 	GameManager.player_list_changed.connect(update_player_list_hud)
-	update_player_list_hud()
 	
-	if controls_label: controls_label.hide()
-	if leave_button: leave_button.hide()
+	_setup_audio_buses()
+	_setup_new_ui()
+	update_player_list_hud()
 	
 	music_player_1 = AudioStreamPlayer.new()
 	music_player_2 = AudioStreamPlayer.new()
@@ -68,9 +74,6 @@ func _ready():
 	music_player_2.volume_db = -80.0
 	
 	leave_button.pressed.connect(_on_leave_button_pressed)
-	
-	_setup_audio_buses()
-	_setup_settings_ui()
 	
 	var wind_player = AudioStreamPlayer.new()
 	wind_player.stream = load("res://sounds/wind.wav")
@@ -102,6 +105,14 @@ func _ready():
 func _process(delta):
 	_update_local_music()
 	
+	ping_timer += delta
+	if ping_timer >= 1.0:
+		ping_timer = 0.0
+		update_player_list_hud()
+		
+	if player_info_panel:
+		player_info_panel.visible = Input.is_key_pressed(KEY_TAB)
+	
 	if not multiplayer.is_server():
 		return
 		
@@ -112,8 +123,8 @@ func _process(delta):
 			wave_timer -= delta
 			if wave_timer <= 0:
 				spawn_enemy()
-				# Scale down the spawn delay dynamically based on time (min 1.0s)
-				wave_timer = max(1.0, 3.0 - (total_game_time / 60.0) * 0.25)
+				# Scale down the spawn delay dynamically based on time (min 1.5s)
+				wave_timer = max(1.5, 4.0 - (total_game_time / 120.0) * 0.5)
 		elif enemies_alive <= 0:
 			end_wave()
 
@@ -127,17 +138,17 @@ func start_wave():
 	elif current_wave == 1:
 		enemies_to_spawn = max(1, GameManager.players.size())
 	else:
-		enemies_to_spawn = min(30, 5 + current_wave * 2)
+		enemies_to_spawn = min(20, 3 + current_wave)
 	enemies_spawned = 0
 	enemies_alive = enemies_to_spawn
-	wave_timer = max(0.2, 2.0 - (total_game_time / 60.0) * 0.5)
+	wave_timer = max(0.5, 3.0 - (total_game_time / 120.0) * 0.5)
 	
 	rpc("announce_wave", current_wave)
 
 func end_wave():
 	wave_active = false
-	# Wait 5 seconds before next wave
-	await get_tree().create_timer(5.0).timeout
+	# Wait 10 seconds before next wave
+	await get_tree().create_timer(10.0).timeout
 	start_wave()
 
 @rpc("call_local", "authority", "reliable")
@@ -177,7 +188,7 @@ func spawn_enemy():
 	enemies_spawned += 1
 	
 	# Delay init_stats slightly so clients have time to instantiate the node for RPC
-	var multiplier = 1.0 + (total_game_time / 120.0)
+	var multiplier = 1.0 + (total_game_time / 300.0)
 	get_tree().create_timer(0.1).timeout.connect(func(): 
 		if is_instance_valid(enemy): 
 			enemy.init_stats(multiplier, type)
@@ -257,23 +268,44 @@ func remove_player(id: int):
 		print("Removed player ", id)
 
 func update_player_list_hud():
-	var text = "Players (" + str(GameManager.players.size()) + "/5):\n"
+	if not player_info_rt: return
+	var text = "[center][b]Players (" + str(GameManager.players.size()) + "/5)[/b][/center]\n\n"
+	text += "[table=3]"
+	text += "[cell][b]Name[/b]      [/cell][cell][b]Character[/b]      [/cell][cell][b]Ping[/b][/cell]"
+	
 	for id in GameManager.players:
 		var details = GameManager.players[id]
-		var line = "• " + details.get("name", "Player") + " (" + details.get("character", "Unknown") + ")"
+		var name_str = details.get("name", "Player")
+		var char_str = details.get("character", "Unknown")
+		var ping_str = "---"
+		
 		if id == multiplayer.get_unique_id():
-			line += " [You]"
-		text += line + "\n"
-	player_list_label.text = text
+			name_str += " (You)"
+			if not multiplayer.is_server():
+				if multiplayer.multiplayer_peer is ENetMultiplayerPeer:
+					var peer = multiplayer.multiplayer_peer as ENetMultiplayerPeer
+					var enet_peer = peer.get_peer(1)
+					if enet_peer:
+						ping_str = str(enet_peer.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME)) + " ms"
+			else:
+				ping_str = "0 ms"
+		
+		text += "[cell]" + name_str + "      [/cell][cell]" + char_str + "      [/cell][cell]" + ping_str + "[/cell]"
+	
+	text += "[/table]"
+	player_info_rt.text = text
 
 func _on_leave_button_pressed():
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	GameManager.leave_game()
 
 func toggle_menu(show: bool):
-	if controls_label: controls_label.visible = show
-	if leave_button: leave_button.visible = show
-	if settings_container: settings_container.visible = show
+	if esc_menu_container:
+		esc_menu_container.visible = show
+		if show:
+			esc_main_menu.show()
+			audio_settings_menu.hide()
+			controls_menu.hide()
 
 func _setup_audio_buses():
 	for bus_name in ["Music", "SFX", "Environment"]:
@@ -283,21 +315,121 @@ func _setup_audio_buses():
 			idx = AudioServer.get_bus_count() - 1
 			AudioServer.set_bus_name(idx, bus_name)
 
-func _setup_settings_ui():
-	settings_container = VBoxContainer.new()
-	var vbox = $HUD/MarginContainer/VBoxContainer
-	vbox.add_child(settings_container)
-	settings_container.hide()
+func _setup_new_ui():
+	# Hide old UI elements
+	if player_list_label: player_list_label.hide()
+	if controls_label: controls_label.hide()
+	if leave_button: leave_button.hide()
 	
-	var spacer = Control.new()
-	spacer.custom_minimum_size = Vector2(0, 20)
-	settings_container.add_child(spacer)
+	var hud = $HUD
+	
+	# Player Info Panel (Tab)
+	var tab_center_container = CenterContainer.new()
+	tab_center_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tab_center_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(tab_center_container)
+	
+	player_info_panel = PanelContainer.new()
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(0.1, 0.1, 0.1, 0.8)
+	style.corner_radius_top_left = 10
+	style.corner_radius_top_right = 10
+	style.corner_radius_bottom_left = 10
+	style.corner_radius_bottom_right = 10
+	style.content_margin_left = 20
+	style.content_margin_right = 20
+	style.content_margin_top = 20
+	style.content_margin_bottom = 20
+	player_info_panel.add_theme_stylebox_override("panel", style)
+	
+	player_info_panel.hide()
+	tab_center_container.add_child(player_info_panel)
+	
+	player_info_rt = RichTextLabel.new()
+	player_info_rt.bbcode_enabled = true
+	player_info_rt.fit_content = true
+	player_info_rt.autowrap_mode = TextServer.AUTOWRAP_OFF
+	player_info_rt.custom_minimum_size = Vector2(400, 0)
+	player_info_panel.add_child(player_info_rt)
+	
+	# Esc Menu
+	esc_menu_container = ColorRect.new()
+	esc_menu_container.color = Color(0, 0, 0, 0.5)
+	esc_menu_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	esc_menu_container.hide()
+	hud.add_child(esc_menu_container)
+	
+	var center_container = CenterContainer.new()
+	center_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	esc_menu_container.add_child(center_container)
+	
+	var menu_panel = PanelContainer.new()
+	menu_panel.add_theme_stylebox_override("panel", style)
+	center_container.add_child(menu_panel)
+	
+	var margin = MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 20)
+	margin.add_theme_constant_override("margin_right", 20)
+	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_bottom", 20)
+	menu_panel.add_child(margin)
+	
+	# Main Menu
+	esc_main_menu = VBoxContainer.new()
+	esc_main_menu.add_theme_constant_override("separation", 15)
+	margin.add_child(esc_main_menu)
 	
 	var title = Label.new()
-	title.text = "Audio Settings"
+	title.text = "Pause Menu"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 24)
-	settings_container.add_child(title)
+	esc_main_menu.add_child(title)
+	
+	var btn_audio = Button.new()
+	btn_audio.text = "Audio Settings"
+	btn_audio.custom_minimum_size = Vector2(200, 40)
+	esc_main_menu.add_child(btn_audio)
+	btn_audio.pressed.connect(func():
+		esc_main_menu.hide()
+		audio_settings_menu.show()
+	)
+	
+	var btn_controls = Button.new()
+	btn_controls.text = "Controls"
+	btn_controls.custom_minimum_size = Vector2(200, 40)
+	esc_main_menu.add_child(btn_controls)
+	btn_controls.pressed.connect(func():
+		esc_main_menu.hide()
+		controls_menu.show()
+	)
+	
+	var btn_leave = Button.new()
+	btn_leave.text = "Leave Session"
+	btn_leave.add_theme_color_override("font_color", Color(1, 0.3, 0.3))
+	btn_leave.custom_minimum_size = Vector2(200, 40)
+	esc_main_menu.add_child(btn_leave)
+	btn_leave.pressed.connect(_on_leave_button_pressed)
+	
+	var btn_resume = Button.new()
+	btn_resume.text = "Resume"
+	btn_resume.custom_minimum_size = Vector2(200, 40)
+	esc_main_menu.add_child(btn_resume)
+	btn_resume.pressed.connect(func():
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		toggle_menu(false)
+	)
+	
+	# Audio Settings Menu
+	audio_settings_menu = VBoxContainer.new()
+	audio_settings_menu.add_theme_constant_override("separation", 15)
+	audio_settings_menu.hide()
+	margin.add_child(audio_settings_menu)
+	
+	var audio_title = Label.new()
+	audio_title.text = "Audio Settings"
+	audio_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	audio_title.add_theme_font_size_override("font_size", 24)
+	audio_settings_menu.add_child(audio_title)
 	
 	var sliders = [
 		{"name": "Master", "bus": "Master"},
@@ -308,7 +440,7 @@ func _setup_settings_ui():
 	
 	for s in sliders:
 		var hbox = HBoxContainer.new()
-		settings_container.add_child(hbox)
+		audio_settings_menu.add_child(hbox)
 		
 		var lbl = Label.new()
 		lbl.text = s["name"]
@@ -321,6 +453,7 @@ func _setup_settings_ui():
 		slider.max_value = 1.0
 		slider.step = 0.01
 		slider.value = db_to_linear(AudioServer.get_bus_volume_db(AudioServer.get_bus_index(s["bus"])))
+		slider.custom_minimum_size = Vector2(150, 0)
 		hbox.add_child(slider)
 		
 		slider.value_changed.connect(func(val):
@@ -328,6 +461,57 @@ func _setup_settings_ui():
 			if val <= 0.001: db = -80.0
 			AudioServer.set_bus_volume_db(AudioServer.get_bus_index(s["bus"]), db)
 		)
+		
+	var btn_audio_back = Button.new()
+	btn_audio_back.text = "Back"
+	btn_audio_back.custom_minimum_size = Vector2(200, 40)
+	audio_settings_menu.add_child(btn_audio_back)
+	btn_audio_back.pressed.connect(func():
+		audio_settings_menu.hide()
+		esc_main_menu.show()
+	)
+	
+	# Controls Menu
+	controls_menu = VBoxContainer.new()
+	controls_menu.add_theme_constant_override("separation", 15)
+	controls_menu.hide()
+	margin.add_child(controls_menu)
+	
+	var controls_title = Label.new()
+	controls_title.text = "Controls"
+	controls_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	controls_title.add_theme_font_size_override("font_size", 24)
+	controls_menu.add_child(controls_title)
+	
+	var ctrl_center = CenterContainer.new()
+	controls_menu.add_child(ctrl_center)
+	
+	var ctrl_text = RichTextLabel.new()
+	ctrl_text.bbcode_enabled = true
+	ctrl_text.fit_content = true
+	ctrl_text.autowrap_mode = TextServer.AUTOWRAP_OFF
+	
+	var table_str = "[table=2]"
+	table_str += "[cell][b][WASD] / [Arrows]  [/b][/cell][cell]Move[/cell]"
+	table_str += "[cell][b][Space]  [/b][/cell][cell]Jump[/cell]"
+	table_str += "[cell][b][Mouse]  [/b][/cell][cell]Rotate Camera[/cell]"
+	table_str += "[cell][b][Esc]  [/b][/cell][cell]Toggle Menu[/cell]"
+	table_str += "[cell][b]Left-Click  [/b][/cell][cell]Attack[/cell]"
+	table_str += "[cell][b]Right-Click  [/b][/cell][cell]Cast Spell[/cell]"
+	table_str += "[cell][b][Scroll]  [/b][/cell][cell]Switch Spell[/cell]"
+	table_str += "[cell][b][F]  [/b][/cell][cell]Interact[/cell]"
+	table_str += "[/table]"
+	ctrl_text.text = table_str
+	ctrl_center.add_child(ctrl_text)
+	
+	var btn_controls_back = Button.new()
+	btn_controls_back.text = "Back"
+	btn_controls_back.custom_minimum_size = Vector2(200, 40)
+	controls_menu.add_child(btn_controls_back)
+	btn_controls_back.pressed.connect(func():
+		controls_menu.hide()
+		esc_main_menu.show()
+	)
 
 func spawn_wall(pos: Vector3, player_rot_y: float):
 	var wall = StaticBody3D.new()

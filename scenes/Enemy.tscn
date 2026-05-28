@@ -1,7 +1,7 @@
 [gd_scene format=3 uid="uid://enemy1"]
 
 [ext_resource type="Script" path="res://scripts/Enemy.gd" id="1_enemy"]
-[ext_resource type="PackedScene" uid="uid://bceh5ngoiutw2" path="res://meshes/characters/Goblin1/Meshy_AI_Rope_Bound_Goblin_0523095536_texture.fbx" id="2_goblin"]
+[ext_resource type="PackedScene" uid="uid://dad1swohkmomp" path="res://meshes/characters/Goblin/Goblin.fbx" id="2_goblin"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_1"]
 radius = 0.25

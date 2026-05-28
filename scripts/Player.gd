@@ -35,9 +35,10 @@ var current_model: Node3D = null
 var current_anim_player: AnimationPlayer = null
 var left_hand_attachment: BoneAttachment3D = null
 var current_animation = ""
+var anim_debug_label: Label3D
 
 var current_spell: int = 0
-var spells: Array = ["zap", "fireball", "unsummon", "giant_growth", "heal", "drain_life", "build_wall"]
+var spells: Array = ["zap", "fireball", "unsummon", "giant_growth", "heal", "drain_life"]
 
 var health: float = 100.0
 var max_health: float = 100.0
@@ -56,8 +57,7 @@ var spell_costs = {
 	"unsummon": 15.0,
 	"drain_life": 40.0,
 	"giant_growth": 20.0,
-	"heal": 30.0,
-	"build_wall": 25.0
+	"heal": 30.0
 }
 
 var is_charging_fireball: bool = false
@@ -69,8 +69,7 @@ var cooldown_timers = {
 	"unsummon": 3.0,
 	"drain_life": 4.0,
 	"giant_growth": 10.0,
-	"heal": 15.0,
-	"build_wall": 5.0
+	"heal": 15.0
 }
 var current_cooldown: float = 0.0
 var current_max_cooldown: float = 0.1
@@ -88,15 +87,14 @@ var remote_velocity: Vector3 = Vector3.ZERO
 var remote_turn_speed: float = 0.0
 
 const CHAR_MODELS = {
-	"CopperMyr": "Meshy_AI_Rusted_Halo_Automaton_0523095702_texture.fbx",
-	"Elf": "Meshy_AI_Verdant_Elf_Warrior_0523074438_texture.fbx",
-	"Goblin1": "Meshy_AI_Rope_Bound_Goblin_0523095536_texture.fbx",
-	"GoldMyr": "Meshy_AI_this_creature_in_t_po_0525024518_texture_fbx.fbx",
-	"Krenko": "Meshy_AI_Crowned_Goblin_Warlor_0523095625_texture.fbx",
-	"LodestoneMyr": "Meshy_AI_Desert_Sentinel_0523104615_texture.fbx",
-	"MyrEnforcer": "Meshy_AI_Azure_Sentinel_0523105005_texture.fbx",
-	"MyrScavenger": "Meshy_AI_Scavenger_Droid_T_Pos_0523095723_texture.fbx",
-	"SilverMyr": "Meshy_AI_Blue_Neon_Automaton_0523095643_texture.fbx"
+	"CopperMyr": "CopperMyr.fbx",
+	"Elf": "Elf.fbx",
+	"Goblin": "Goblin.fbx",
+	"GoldMyr": "GoldMyr.fbx",
+	"Krenko": "Krenko.fbx",
+	"LodestoneMyr": "LodestoneMyr.fbx",
+	"MyrEnforcer": "MyrEnforcer.fbx",
+	"SilverMyr": "SilverMyr.fbx"
 }
 
 func _enter_tree():
@@ -130,6 +128,13 @@ func _ready():
 	if visuals.has_node("Particles"): visuals.get_node("Particles").queue_free()
 	
 	_apply_player_details()
+	
+	anim_debug_label = Label3D.new()
+	anim_debug_label.position = Vector3(0, 2.5, 0)
+	anim_debug_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	anim_debug_label.pixel_size = 0.005
+	anim_debug_label.modulate = Color(1, 1, 0) # yellow
+	add_child(anim_debug_label)
 
 func _apply_player_details():
 	if GameManager.players.has(player_id):
@@ -168,29 +173,26 @@ func _load_character_model():
 		left_hand_attachment.bone_name = "mixamorig_LeftHand"
 		skeleton.add_child(left_hand_attachment)
 		
-	var is_mutant = (player_character == "LodestoneMyr" or player_character == "MyrEnforcer")
 	var anim_names = {
-		"idle": "mutant idle.fbx" if is_mutant else "idle.fbx",
-		"walk": "mutant walking.fbx" if is_mutant else "walking.fbx",
-		"run": "mutant run.fbx" if is_mutant else "running.fbx",
-		"jump": "mutant jumping.fbx" if is_mutant else "jumping up.fbx",
-		"pickup": "mutant roaring.fbx" if is_mutant else "stand to cover.fbx",
-		"turn_left": "mutant left turn 45.fbx" if is_mutant else "left turn.fbx",
-		"turn_right": "mutant right turn 45.fbx" if is_mutant else "right turn.fbx"
+		"idle1": "idle1.fbx",
+		"idle2": "idle2.fbx",
+		"idle3": "idle3.fbx",
+		"walk": "walking.fbx",
+		"run": "running.fbx",
+		"jump": "jumping up.fbx",
+		"pickup": "stand to cover.fbx",
+		"turn_left": "left turn.fbx",
+		"turn_right": "right turn.fbx",
+		"attack1": "Punching (1).fbx",
+		"attack2": "Cross Punch.fbx",
+		"attack3": "Hook Punch.fbx",
+		"cast_fireball": "Fireball.fbx",
+		"cast_zap": "Punching.fbx"
 	}
-	
-	anim_names["attack1"] = "res://meshes/characters/shared/Punching (1).fbx"
-	anim_names["attack2"] = "res://meshes/characters/shared/Cross Punch.fbx"
-	anim_names["attack3"] = "res://meshes/characters/shared/Hook Punch.fbx"
-		
-	anim_names["cast_fireball"] = "res://meshes/characters/shared/Fireball.fbx"
-	anim_names["cast_zap"] = "res://meshes/characters/shared/Punching.fbx"
 	
 	var lib = AnimationLibrary.new()
 	for a_name in anim_names:
-		var path = anim_names[a_name]
-		if not path.begins_with("res://"):
-			path = "res://meshes/characters/" + player_character + "/" + path
+		var path = "res://meshes/characters/shared/" + anim_names[a_name]
 			
 		if ResourceLoader.exists(path):
 			var a_scene = load(path)
@@ -226,7 +228,7 @@ func _load_character_model():
 		current_anim_player.remove_animation_library("actions")
 	current_anim_player.add_animation_library("actions", lib)
 	
-	play_anim("idle")
+	play_anim("idle" + str(randi() % 3 + 1))
 
 func play_anim(anim_name: String):
 	if not current_anim_player or not current_anim_player.has_animation("actions/" + anim_name):
@@ -242,7 +244,7 @@ func play_anim(anim_name: String):
 		if current_anim_player.is_playing() and current_anim_player.current_animation == "actions/" + current_animation:
 			return
 			
-	var should_play = (current_animation != anim_name) or not current_anim_player.is_playing()
+	var should_play = (current_animation != anim_name) or (not current_anim_player.is_playing() and anim_name != "jump")
 	
 	if should_play:
 		var blend = 0.2
@@ -254,6 +256,18 @@ func play_anim(anim_name: String):
 			
 		current_anim_player.play("actions/" + anim_name, blend, speed_mult)
 		current_animation = anim_name
+
+func _input(event):
+	if not is_multiplayer_authority():
+		return
+	if event is InputEventKey and event.physical_keycode == KEY_ESCAPE and event.pressed and not event.is_echo():
+		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+			get_tree().root.get_node("Main").toggle_menu(true)
+		else:
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			get_tree().root.get_node("Main").toggle_menu(false)
+		get_viewport().set_input_as_handled()
 
 func _unhandled_input(event):
 	if not is_multiplayer_authority():
@@ -314,21 +328,11 @@ func _unhandled_input(event):
 					rpc("cast_giant_growth")
 				elif spells[current_spell] == "heal":
 					rpc("cast_heal")
-				elif spells[current_spell] == "build_wall":
-					rpc("cast_build_wall", target_pos)
 			
 	if event is InputEventKey and event.physical_keycode == KEY_F and event.pressed:
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			rpc("trigger_anim", "pickup")
 			
-	if event is InputEventKey and event.physical_keycode == KEY_ESCAPE and event.pressed:
-		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-			get_tree().root.get_node("Main").toggle_menu(true)
-		else:
-			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-			get_tree().root.get_node("Main").toggle_menu(false)
-		
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		spring_arm.rotate_x(-event.relative.y * mouse_sensitivity)
@@ -385,6 +389,9 @@ func _physics_process(delta):
 	if not current_model or name_label.text != player_name:
 		_apply_player_details()
 		
+	if anim_debug_label:
+		anim_debug_label.text = "Anim: " + current_animation
+		
 	if not is_multiplayer_authority():
 		_sync_remote_animations(delta)
 		return
@@ -407,7 +414,7 @@ func _physics_process(delta):
 			cooldown_ui.position = v_size / 2.0
 			
 	if is_charging_fireball:
-		var drain_rate = 50.0
+		var drain_rate = 25.0
 		var drain_amount = drain_rate * delta
 		if mana >= drain_amount and charged_mana + drain_amount <= 100.0:
 			mana -= drain_amount
@@ -421,7 +428,9 @@ func _physics_process(delta):
 	else:
 		mana = min(mana + mana_regen * delta, max_mana)
 	if mana_bar: mana_bar.value = mana
-	if health_bar: health_bar.value = health
+	if health_bar:
+		health_bar.max_value = max_health
+		health_bar.value = health
 		
 	# Add gravity
 	if not is_on_floor():
@@ -465,10 +474,13 @@ func _physics_process(delta):
 			elif turn_dir < 0:
 				play_anim("turn_right")
 			else:
-				play_anim("idle")
+				if not current_animation.begins_with("idle"):
+					play_anim("idle" + str(randi() % 3 + 1))
 		
-	if Input.is_key_pressed(KEY_SPACE) and is_on_floor():
+	if Input.is_key_pressed(KEY_SPACE) and is_on_floor() and not is_acting:
 		velocity.y = 5.0
+		
+	if not is_on_floor():
 		play_anim("jump")
 	
 	move_and_slide()
@@ -502,25 +514,34 @@ func trigger_anim(anim_name: String):
 		var from = visuals.global_position + Vector3(0, 0.2, 0)
 		# Assuming visuals face -Z
 		var forward = - visuals.global_transform.basis.z.normalized()
-		var to = from + forward * 3.0
 		
-		# Collision mask 4 is the enemy layer
-		var query = PhysicsRayQueryParameters3D.create(from, to, 4)
-		query.exclude = [ self.get_rid()]
-		var result = space_state.intersect_ray(query)
+		var sphere = SphereShape3D.new()
+		sphere.radius = 1.0
+		var query = PhysicsShapeQueryParameters3D.new()
+		query.shape = sphere
+		query.transform = Transform3D(Basis(), from + forward * 1.5)
+		query.collision_mask = 4
+		query.exclude = [self.get_rid()]
 		
-		if result and result.collider and result.collider.has_method("take_damage"):
+		var results = space_state.intersect_shape(query)
+		var hit_collider = null
+		if results.size() > 0:
+			hit_collider = results[0].collider
+			
+		if hit_collider and hit_collider.has_method("take_damage"):
 			play_sound("res://sounds/punch" + str(randi() % 4 + 1) + ".wav")
 			if multiplayer.is_server():
-				result.collider.take_damage(25.0, forward)
-				if result.collider.has_method("gain_aggro"):
-					result.collider.gain_aggro(self )
+				hit_collider.take_damage(25.0 * damage_multiplier, forward)
+				if hit_collider.has_method("gain_aggro"):
+					hit_collider.gain_aggro(self )
 		else:
 			play_sound("res://sounds/punsh-miss.wav")
 
 @rpc("any_peer", "call_local", "reliable")
 func fire_zap(target_pos: Vector3, hit_path: NodePath = NodePath()):
-	play_anim("cast_zap")
+	play_anim("cast_fireball")
+	await get_tree().create_timer(1.2).timeout
+	
 	play_sound("res://sounds/lightning-bolt" + str(randi() % 2 + 1) + ".wav")
 	
 	if multiplayer.is_server() and not hit_path.is_empty():
@@ -940,13 +961,16 @@ func _sync_remote_animations(delta):
 		elif remote_turn_speed < -0.5:
 			play_anim("turn_right")
 		else:
-			play_anim("idle")
+			if not current_animation.begins_with("idle"):
+				play_anim("idle" + str(randi() % 3 + 1))
 
 # --- NEW SPELLS ---
 
 @rpc("any_peer", "call_local", "reliable")
 func fire_unsummon(target_pos: Vector3, hit_path: NodePath = NodePath()):
-	play_anim("attack")
+	play_anim("cast_fireball")
+	await get_tree().create_timer(1.2).timeout
+	
 	play_sound("res://sounds/punch1.wav")
 	if multiplayer.is_server() and not hit_path.is_empty():
 		var hit_node = get_node_or_null(hit_path)
@@ -965,7 +989,9 @@ func fire_unsummon(target_pos: Vector3, hit_path: NodePath = NodePath()):
 
 @rpc("any_peer", "call_local", "reliable")
 func fire_drain_life(target_pos: Vector3, hit_path: NodePath = NodePath()):
-	play_anim("attack")
+	play_anim("cast_fireball")
+	await get_tree().create_timer(1.2).timeout
+	
 	play_sound("res://sounds/lifedrain.wav")
 	if multiplayer.is_server() and not hit_path.is_empty():
 		var hit_node = get_node_or_null(hit_path)
@@ -984,7 +1010,9 @@ func fire_drain_life(target_pos: Vector3, hit_path: NodePath = NodePath()):
 
 @rpc("any_peer", "call_local", "reliable")
 func cast_giant_growth():
-	play_anim("pickup")
+	play_anim("cast_fireball")
+	await get_tree().create_timer(1.5).timeout
+	
 	play_sound("res://sounds/giant-growth.wav")
 	
 	# Grow bigger over 0.5s
@@ -1016,7 +1044,9 @@ func cast_giant_growth():
 
 @rpc("any_peer", "call_local", "reliable")
 func cast_heal():
-	play_anim("pickup")
+	play_anim("cast_fireball")
+	await get_tree().create_timer(1.5).timeout
+	
 	play_sound("res://sounds/heal1.wav")
 	health = min(health + 50.0, max_health)
 	
@@ -1028,12 +1058,28 @@ func cast_heal():
 	create_heal_visual(global_position)
 
 @rpc("any_peer", "call_local", "reliable")
-func cast_build_wall(target_pos: Vector3):
-	play_anim("attack")
-	if multiplayer.is_server():
-		var main = get_tree().root.get_node_or_null("Main")
-		if main and main.has_method("spawn_wall"):
-			main.spawn_wall(target_pos, rotation.y)
+func take_damage(amount: float, knockback_dir: Vector3 = Vector3.ZERO):
+	if is_multiplayer_authority():
+		health = max(0, health - amount)
+		if health_bar: health_bar.value = health
+		
+		# Slight red flash
+		var tween = create_tween()
+		tween.tween_property($Visuals, "scale", Vector3(0.9, 0.9, 0.9), 0.1)
+		tween.tween_property($Visuals, "scale", Vector3(1, 1, 1), 0.1)
+		
+		# Knockback
+		velocity += knockback_dir * 5.0
+		
+		if health <= 0:
+			die()
+
+func die():
+	position = Vector3(0, 50, 0)
+	health = max_health
+	if health_bar: health_bar.value = health
+
+
 
 # --- VISUAL EFFECTS ---
 

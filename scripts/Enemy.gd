@@ -1,15 +1,16 @@
 extends CharacterBody3D
 
-const WALK_SCENE = preload("res://meshes/characters/Goblin1/walking.fbx")
-const RUN_SCENE = preload("res://meshes/characters/Goblin1/running.fbx")
-const IDLE_SCENE = preload("res://meshes/characters/Goblin1/idle.fbx")
-const DEATH_SCENE = preload("res://meshes/characters/Goblin1/hard landing.fbx")
+const WALK_SCENE = preload("res://meshes/characters/shared/walking.fbx")
+const RUN_SCENE = preload("res://meshes/characters/shared/running.fbx")
+const IDLE_SCENE = preload("res://meshes/characters/shared/idle1.fbx")
+const DEATH_SCENE = preload("res://meshes/characters/shared/hard landing.fbx")
+const ATTACK_SCENE = preload("res://meshes/characters/shared/Punching (1).fbx")
 
 const MANA_CRYSTAL_SCRIPT = preload("res://scripts/ManaCrystal.gd")
 const DAMAGE_NUMBER_SCRIPT = preload("res://scripts/DamageNumber.gd")
 
 @export var base_speed: float = 3.0
-@export var base_damage: float = 10.0
+@export var base_damage: float = 5.0
 @export var base_health: float = 50.0
 
 var speed: float
@@ -24,6 +25,9 @@ var knockback_velocity: Vector3 = Vector3.ZERO
 var original_material: Material = null
 var flash_timer: Timer = null
 
+var attack_cooldown: float = 0.0
+const ATTACK_INTERVAL: float = 1.0
+
 var nav_agent: NavigationAgent3D
 
 var enemy_type: String = "goblin"
@@ -32,7 +36,7 @@ var boss_bar: ProgressBar
 # --- Aggro System ---
 var aggro_target: CharacterBody3D = null
 var aggro_range: float = 20.0
-var attack_range: float = 3.0
+var attack_range: float = 1.5
 var leash_range: float = 40.0
 var aggro_timer: float = 0.0
 const AGGRO_CHECK_INTERVAL: float = 0.5
@@ -123,6 +127,17 @@ func setup_animations():
 			anim_library.add_animation("death", anim)
 		d_root.queue_free()
 
+	# Attack
+	if ATTACK_SCENE:
+		var a_root = ATTACK_SCENE.instantiate()
+		var a_ap = a_root.get_node_or_null("AnimationPlayer")
+		if a_ap and a_ap.has_animation("mixamo_com"):
+			var anim = a_ap.get_animation("mixamo_com").duplicate()
+			anim.loop_mode = Animation.LOOP_NONE
+			_make_animation_stationary(anim)
+			anim_library.add_animation("attack", anim)
+		a_root.queue_free()
+
 func _make_animation_stationary(anim: Animation):
 	for i in range(anim.get_track_count()):
 		var path = str(anim.track_get_path(i))
@@ -181,7 +196,7 @@ func setup_boss_ui():
 func init_stats(multiplier: float, type: String = "goblin"):
 	var max_hp = 50.0
 	var spd = 3.0
-	var dmg = 10.0
+	var dmg = 5.0
 	var scale_factor = 1.0
 	
 	match type:
@@ -200,7 +215,7 @@ func init_stats(multiplier: float, type: String = "goblin"):
 		"goblin", _:
 			max_hp = 50.0
 			spd = 3.0
-			scale_factor = max(1.0, 1.0 * multiplier)
+			scale_factor = clamp(1.0 * multiplier, 1.0, 2.0)
 
 	max_hp *= multiplier
 	dmg *= multiplier
@@ -232,23 +247,46 @@ func _physics_process(delta):
 	
 	# Determine nav target
 	var nav_target: Vector3 = base_pos
+	var targeting_player = false
 	if aggro_target and is_instance_valid(aggro_target):
 		nav_target = aggro_target.global_position
+		targeting_player = true
 	
 	nav_agent.target_position = nav_target
 	
 	# Check if we reached our target
+	var is_at_target = false
 	if nav_agent.is_navigation_finished():
-		if aggro_target and is_instance_valid(aggro_target):
-			# Close to a player - stop and attack
-			velocity.x = 0.0
-			velocity.z = 0.0
-			move_and_slide()
-			return
-		else:
-			has_reached_base = true
-			attack_base()
-			return
+		is_at_target = true
+	elif targeting_player and global_position.distance_to(nav_target) <= attack_range:
+		is_at_target = true
+		
+	if is_at_target:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		
+		if knockback_velocity.length() > 0.1:
+			velocity += knockback_velocity
+			knockback_velocity = knockback_velocity.lerp(Vector3.ZERO, 10.0 * delta)
+			
+		move_and_slide()
+		
+		# Rotate towards target
+		var look_target = nav_target
+		look_target.y = global_position.y
+		if global_position.distance_to(look_target) > 0.1:
+			var target_transform = transform.looking_at(look_target, Vector3.UP)
+			transform = transform.interpolate_with(target_transform, 10.0 * delta)
+			
+		attack_cooldown -= delta
+		if attack_cooldown <= 0.0:
+			attack_cooldown = ATTACK_INTERVAL
+			_perform_attack(targeting_player)
+			
+		return
+	else:
+		attack_cooldown = 0.0
+		has_reached_base = false
 	
 	var next_path_position = nav_agent.get_next_path_position()
 	var dir = global_position.direction_to(next_path_position)
@@ -310,30 +348,31 @@ func gain_aggro(attacker: Node) -> void:
 	if attacker is CharacterBody3D and is_instance_valid(attacker):
 		aggro_target = attacker
 
-func attack_base():
-	if animation_player and animation_player.has_animation("idle"):
-		animation_player.play("idle")
-		
-	var attack_timer_node = Timer.new()
-	attack_timer_node.wait_time = 1.0
-	attack_timer_node.autostart = true
-	attack_timer_node.timeout.connect(_on_attack_timer_timeout)
-	add_child(attack_timer_node)
-	
-	_on_attack_timer_timeout()
-
-func _on_attack_timer_timeout():
+func _perform_attack(targeting_player: bool):
 	if not multiplayer.is_server() or is_dead: return
-	var base = get_tree().root.get_node_or_null("Main/BaseCristal")
-	if base and base.has_method("take_damage"):
-		base.take_damage(damage)
-	elif base and "health" in base:
-		base.health = max(base.health - damage, 0.0)
-		
-	rpc("play_attack_sound")
+	
+	rpc("play_attack_anim_and_sound", targeting_player)
+	
+	if targeting_player and aggro_target and is_instance_valid(aggro_target):
+		if aggro_target.has_method("take_damage"):
+			var push_dir = global_position.direction_to(aggro_target.global_position)
+			aggro_target.take_damage(damage, push_dir)
+	else:
+		# Attack base
+		var base = get_tree().root.get_node_or_null("Main/BaseCristal")
+		if base and base.has_method("take_damage"):
+			base.take_damage(damage)
+		elif base and "health" in base:
+			base.health = max(base.health - damage, 0.0)
 
 @rpc("call_local", "any_peer", "reliable")
-func play_attack_sound():
+func play_attack_anim_and_sound(targeting_player: bool):
+	if animation_player:
+		if animation_player.has_animation("attack"):
+			animation_player.play("attack", -1, 1.5)
+		else:
+			animation_player.play("idle", -1, 1.5)
+			
 	var punch_sound = "res://sounds/punch" + str(randi() % 4 + 1) + ".wav"
 	var audio = AudioStreamPlayer3D.new()
 	audio.stream = load(punch_sound)
@@ -343,7 +382,7 @@ func play_attack_sound():
 	audio.play()
 	audio.finished.connect(audio.queue_free)
 	
-	if randf() > 0.5:
+	if not targeting_player and randf() > 0.5:
 		var audio2 = AudioStreamPlayer3D.new()
 		audio2.stream = load("res://sounds/cristal.wav")
 		audio2.bus = "SFX"
