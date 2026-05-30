@@ -49,11 +49,11 @@ const ISLAND_POSITIONS = [
 ]
 
 const SPAWN_POINTS = [
-	Vector3(0, 50.0, 0),
-	Vector3(-6.0, 50.0, -6.0),
-	Vector3(6.0, 50.0, -6.0),
-	Vector3(-6.0, 50.0, 6.0),
-	Vector3(6.0, 50.0, 6.0)
+	Vector3(35.0, 5.0, 0.0),       # Bridge 1 (Host) - Perfect here
+	Vector3(13.9, 5.0, 42.8),      # Bridge 2 (Pushed to radius 45)
+	Vector3(-36.4, 5.0, 26.4),     # Bridge 3 (Pushed to radius 45)
+	Vector3(-36.4, 5.0, -26.4),    # Bridge 4 (Pushed to radius 45)
+	Vector3(13.9, 5.0, -42.8)      # Bridge 5 (Pushed to radius 45)
 ]
 
 func _ready():
@@ -251,11 +251,29 @@ func add_player(id: int):
 	var player = player_scene.instantiate()
 	player.name = str(id)
 	
-	# Determine spawn position based on child count
-	var spawn_index = players_container.get_child_count() % SPAWN_POINTS.size()
-	player.position = SPAWN_POINTS[spawn_index]
+	# Use visual Marker3D nodes from the scene if they exist, otherwise fallback to static array
+	var spawn_pos = Vector3.ZERO
+	var spawn_index = 0
+	if has_node("SpawnPoints") and $SpawnPoints.get_child_count() > 0:
+		var spawn_points_parent = $SpawnPoints
+		spawn_index = players_container.get_child_count() % spawn_points_parent.get_child_count()
+		var marker = spawn_points_parent.get_child(spawn_index)
+		spawn_pos = marker.global_position
+	else:
+		spawn_index = players_container.get_child_count() % SPAWN_POINTS.size()
+		spawn_pos = SPAWN_POINTS[spawn_index]
+	
+	player.position = spawn_pos
+	
+	# Look towards the island
+	var target_island = ISLAND_POSITIONS[spawn_index % ISLAND_POSITIONS.size()]
+	var dir = (target_island - player.position)
+	dir.y = 0
+	if dir != Vector3.ZERO:
+		player.transform.basis = Basis.looking_at(dir.normalized(), Vector3.UP)
 	
 	players_container.add_child(player)
+	player.rpc("setup_spawn_transform", player.position, player.transform.basis)
 	print("Spawned player ", id, " at ", player.position)
 
 func remove_player(id: int):

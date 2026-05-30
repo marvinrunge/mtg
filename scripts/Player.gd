@@ -115,8 +115,38 @@ func _enter_tree():
 		player_id = id
 		set_multiplayer_authority(id)
 
+@rpc("authority", "call_local", "reliable")
+func setup_spawn_transform(spawn_pos: Vector3, spawn_rot: Basis):
+	position = spawn_pos
+	transform.basis = spawn_rot
+
 func _ready():
 	if is_multiplayer_authority():
+		# Calculate spawn position locally to prevent MultiplayerSynchronizer race conditions
+		var main = get_tree().root.get_node_or_null("Main")
+		if main:
+			var container = main.get_node_or_null("PlayersContainer")
+			if container:
+				var my_index = container.get_children().find(self)
+				if my_index == -1: my_index = container.get_child_count()
+				
+				var spawn_pos = Vector3.ZERO
+				var markers = main.get_node_or_null("SpawnPoints")
+				if markers and markers.get_child_count() > 0:
+					var m_idx = my_index % markers.get_child_count()
+					spawn_pos = markers.get_child(m_idx).global_position
+				else:
+					var m_idx = my_index % main.SPAWN_POINTS.size()
+					spawn_pos = main.SPAWN_POINTS[m_idx]
+				
+				position = spawn_pos
+				
+				var target_island = main.ISLAND_POSITIONS[my_index % main.ISLAND_POSITIONS.size()]
+				var dir = (target_island - spawn_pos)
+				dir.y = 0
+				if dir != Vector3.ZERO:
+					transform.basis = Basis.looking_at(dir.normalized(), Vector3.UP)
+					
 		camera.make_current()
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		name_label.visible = false
@@ -210,9 +240,9 @@ func _load_character_model():
 		sphere_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		sphere_mesh.material = sphere_mat
 		magic_essence_sphere.mesh = sphere_mesh
-		magic_essence_sphere.global_position = _get_hands_midpoint()
 		right_hand_attachment.add_child(magic_essence_sphere)
-
+		magic_essence_sphere.global_position = _get_hands_midpoint()
+		
 		magic_essence_particles = CPUParticles3D.new()
 		magic_essence_particles.cast_shadow = 0
 		magic_essence_particles.amount = 120
@@ -539,6 +569,9 @@ func _get_spell_target() -> Dictionary:
 func _get_hands_midpoint() -> Vector3:
 	# Center point between both hand bones, pushed forward
 	if is_instance_valid(right_hand_attachment) and is_instance_valid(left_hand_attachment):
+		if not right_hand_attachment.is_inside_tree() or not left_hand_attachment.is_inside_tree():
+			return global_position + Vector3(0, 1.2, 0)
+			
 		var left_pos = left_hand_attachment.global_position
 		var right_pos = right_hand_attachment.global_position
 		var mid = (right_pos + left_pos) / 2.0
