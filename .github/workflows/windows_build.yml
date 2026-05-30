@@ -1,0 +1,41 @@
+name: "Build and Export to Windows"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  export-windows:
+    name: Windows Export
+    runs-on: ubuntu-latest
+    container:
+      # Note: using 4.3 as it is the latest widely available container, 
+      # but you can change this to 4.x depending on your exact minor version.
+      image: barichello/godot-ci:4.3
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Godot Templates
+        run: |
+          mkdir -v -p ~/.local/share/godot/export_templates/
+          mv /root/.local/share/godot/export_templates/* ~/.local/share/godot/export_templates/ || true
+          
+      - name: Build Windows Export
+        run: |
+          mkdir -v -p build/windows
+          # Ensure this matches the name in your export_presets.cfg
+          godot --headless --export-release "Windows Desktop" build/windows/MyrQuest.exe
+          
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyrQuest-Windows
+          path: build/windows/
