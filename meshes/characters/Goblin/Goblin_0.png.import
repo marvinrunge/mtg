@@ -2,14 +2,11 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://daaadonjjg0fy"
+uid="uid://dsiiog5w1xsi1"
 path.s3tc="res://.godot/imported/Goblin_0.png-ee4b40c3a5fdc978873073348f268f3e.s3tc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
-}
-generator_parameters={
-"md5": "1829d4701c483d8515b79c0205f4e063"
 }
 
 [deps]

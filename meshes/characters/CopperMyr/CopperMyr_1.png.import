@@ -2,14 +2,11 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cv7vbrpyvxvs2"
+uid="uid://d33xh3lju2rnw"
 path.s3tc="res://.godot/imported/CopperMyr_1.png-8288fb95c00486e07a5379751c7c45eb.s3tc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
-}
-generator_parameters={
-"md5": "52a007c7aedc49f89be518b2d88e2e7b"
 }
 
 [deps]

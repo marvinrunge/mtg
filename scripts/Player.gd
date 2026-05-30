@@ -4,8 +4,9 @@ const FIREBALL_SCRIPT = preload("res://scripts/Fireball.gd")
 
 var sound_cache: Dictionary = {
 	"res://sounds/fireball.wav": preload("res://sounds/fireball.wav"),
-	"res://sounds/lightning-bolt1.wav": preload("res://sounds/lightning-bolt1.wav"),
-	"res://sounds/lightning-bolt2.wav": preload("res://sounds/lightning-bolt2.wav"),
+	"res://sounds/shock-1.wav": preload("res://sounds/shock-1.wav"),
+	"res://sounds/shock-2.wav": preload("res://sounds/shock-2.wav"),
+	"res://sounds/shock-3.wav": preload("res://sounds/shock-3.wav"),
 	"res://sounds/punch1.wav": preload("res://sounds/punch1.wav"),
 	"res://sounds/punch2.wav": preload("res://sounds/punch2.wav"),
 	"res://sounds/punch3.wav": preload("res://sounds/punch3.wav"),
@@ -17,7 +18,7 @@ var sound_cache: Dictionary = {
 	"res://sounds/walking-footsteps-stone.wav": preload("res://sounds/walking-footsteps-stone.wav")
 }
 
-@export var speed = 4.0
+@export var speed = 2.5
 @export var run_speed = 8.0
 
 # Synced properties
@@ -33,12 +34,18 @@ var sound_cache: Dictionary = {
 var mouse_sensitivity = 0.003
 var current_model: Node3D = null
 var current_anim_player: AnimationPlayer = null
+var right_hand_attachment: BoneAttachment3D = null
 var left_hand_attachment: BoneAttachment3D = null
+var chest_attachment: BoneAttachment3D = null
+var magic_essence_particles: CPUParticles3D = null
+var magic_essence_sphere: MeshInstance3D = null
+var magic_essence_light: OmniLight3D = null
 var current_animation = ""
 var anim_debug_label: Label3D
+var active_drain_visuals: Array = []
 
 var current_spell: int = 0
-var spells: Array = ["zap", "fireball", "unsummon", "giant_growth", "heal", "drain_life"]
+var spells: Array = ["shock", "fireball", "unsummon", "giant_growth", "heal", "drain_life"]
 
 var health: float = 100.0
 var max_health: float = 100.0
@@ -49,10 +56,13 @@ var max_mana: float = 100.0
 var mana_regen: float = 3.0
 
 var footstep_player: AudioStreamPlayer3D
+var charge_audio_player: AudioStreamPlayer3D
 var punch_cooldown: float = 0.0
+var jump_delay_timer: float = 0.0
+var pending_jump_force: float = 0.0
 
 var spell_costs = {
-	"zap": 5.0,
+	"shock": 5.0,
 	"fireball": 30.0,
 	"unsummon": 15.0,
 	"drain_life": 40.0,
@@ -62,14 +72,16 @@ var spell_costs = {
 
 var is_charging_fireball: bool = false
 var charged_mana: float = 0.0
+var is_giant_growth_active: bool = false
+var magic_pulse_tween: Tween
 
 var cooldown_timers = {
-	"zap": 0.5,
-	"fireball": 2.0,
-	"unsummon": 3.0,
-	"drain_life": 4.0,
-	"giant_growth": 10.0,
-	"heal": 15.0
+	"shock": 1.0,
+	"fireball": 1.0,
+	"unsummon": 1.0,
+	"drain_life": 1.0,
+	"giant_growth": 1.0,
+	"heal": 1.0
 }
 var current_cooldown: float = 0.0
 var current_max_cooldown: float = 0.1
@@ -159,6 +171,8 @@ func _load_character_model():
 	
 	# Scale if needed, some FBX models are huge. Mixamo models are usually fine (scale 0.01 inside but node is 1)
 	current_model.scale = Vector3(1, 1, 1)
+	# Slight lift to prevent feet from clipping into the floor
+	current_model.position.y = 0.05
 	# Mixamo models face +Z by default, Godot forward is -Z
 	current_model.rotation.y = PI
 	
@@ -169,66 +183,202 @@ func _load_character_model():
 	# Find Skeleton3D and attach bone
 	var skeleton = _find_skeleton(current_model)
 	if skeleton:
+		right_hand_attachment = BoneAttachment3D.new()
+		right_hand_attachment.bone_name = "mixamorig_RightHand"
+		skeleton.add_child(right_hand_attachment)
+		
 		left_hand_attachment = BoneAttachment3D.new()
 		left_hand_attachment.bone_name = "mixamorig_LeftHand"
 		skeleton.add_child(left_hand_attachment)
+		
+		chest_attachment = BoneAttachment3D.new()
+		chest_attachment.bone_name = "mixamorig_Spine2"
+		skeleton.add_child(chest_attachment)
+		
+		# Create magic essence floating between both hands
+		magic_essence_sphere = MeshInstance3D.new()
+		magic_essence_sphere.top_level = true
+		magic_essence_sphere.cast_shadow = 0
+		var sphere_mesh = SphereMesh.new()
+		sphere_mesh.radius = 0.06
+		sphere_mesh.height = 0.12
+		var sphere_mat = StandardMaterial3D.new()
+		sphere_mat.albedo_color = Color(1.0, 1.0, 1.0)
+		sphere_mat.emission_enabled = true
+		sphere_mat.emission = Color(1.0, 1.0, 1.0)
+		sphere_mat.emission_energy_multiplier = 5.0
+		sphere_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		sphere_mesh.material = sphere_mat
+		magic_essence_sphere.mesh = sphere_mesh
+		magic_essence_sphere.global_position = _get_hands_midpoint()
+		right_hand_attachment.add_child(magic_essence_sphere)
+
+		magic_essence_particles = CPUParticles3D.new()
+		magic_essence_particles.cast_shadow = 0
+		magic_essence_particles.amount = 120
+		magic_essence_particles.lifetime = 0.8
+		magic_essence_particles.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+		magic_essence_particles.emission_sphere_radius = 0.08
+		magic_essence_particles.direction = Vector3(0, 1, 0)
+		magic_essence_particles.spread = 180.0
+		magic_essence_particles.initial_velocity_min = 0.05
+		magic_essence_particles.initial_velocity_max = 0.2
+		magic_essence_particles.gravity = Vector3(0, 0.05, 0)
+		magic_essence_particles.scale_amount_min = 0.2
+		magic_essence_particles.scale_amount_max = 1.8
+		var p_mesh = SphereMesh.new()
+		p_mesh.radius = 0.002
+		p_mesh.height = 0.004
+		var p_mat = StandardMaterial3D.new()
+		p_mat.vertex_color_use_as_albedo = true
+		p_mat.emission_enabled = true
+		p_mat.emission = Color(1.0, 1.0, 1.0)
+		p_mat.emission_energy_multiplier = 3.0
+		p_mesh.material = p_mat
+		magic_essence_particles.mesh = p_mesh
+		magic_essence_sphere.add_child(magic_essence_particles)
+		
+		magic_essence_light = OmniLight3D.new()
+		magic_essence_light.omni_range = 1.0
+		magic_essence_light.light_energy = 1.0
+		magic_essence_sphere.add_child(magic_essence_light)
+		
+		# Heat distortion / Refraction effect
+		var heat_distortion = MeshInstance3D.new()
+		heat_distortion.cast_shadow = 0
+		var heat_mesh = SphereMesh.new()
+		heat_mesh.radius = 0.12 # Larger than the base sphere
+		heat_mesh.height = 0.24
+		var heat_mat = ShaderMaterial.new()
+		var shader = Shader.new()
+		shader.code = """
+shader_type spatial;
+render_mode unshaded;
+uniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_linear;
+
+void fragment() {
+	// Calculate mask so distortion fades out smoothly at the edges of the heat sphere
+	float edge = 1.0 - dot(NORMAL, VIEW);
+	float mask = smoothstep(1.0, 0.0, edge);
+	
+	// Complex sine wave for heat shimmer
+	float wobble = sin(TIME * 8.0 + UV.y * 20.0) * cos(TIME * 5.0 + UV.x * 20.0);
+	
+	// Very subtle distortion
+	vec2 uv = SCREEN_UV + (wobble * 0.001 * mask);
+	
+	ALBEDO = texture(screen_texture, uv).rgb;
+}
+"""
+		heat_mat.shader = shader
+		heat_mesh.material = heat_mat
+		heat_distortion.mesh = heat_mesh
+		# Ensure the heat distortion renders before the glowing particles so it doesn't hide them!
+		heat_distortion.sorting_offset = -10.0
+		magic_essence_sphere.add_child(heat_distortion)
+		
+		_update_spell_ui()
 		
 	var anim_names = {
 		"idle1": "idle1.fbx",
 		"idle2": "idle2.fbx",
 		"idle3": "idle3.fbx",
-		"walk": "walking.fbx",
-		"run": "running.fbx",
-		"jump": "jumping up.fbx",
-		"pickup": "stand to cover.fbx",
-		"turn_left": "left turn.fbx",
-		"turn_right": "right turn.fbx",
-		"attack1": "Punching (1).fbx",
-		"attack2": "Cross Punch.fbx",
-		"attack3": "Hook Punch.fbx",
-		"cast_fireball": "Fireball.fbx",
-		"cast_zap": "Punching.fbx"
+		"walk_forward": "walk_forward.fbx",
+		"walk_back": "walk_back.fbx",
+		"walk_left": "walk_left.fbx",
+		"walk_right": "walk_right.fbx",
+		"run_forward": "run_forward.fbx",
+		"run_back": "run_back.fbx",
+		"run_left": "run_left.fbx",
+		"run_right": "run_right.fbx",
+		"jump": "jump.fbx",
+		"jump_running": "jump_running.fbx",
+		"pickup": "pickup.fbx",
+		"attack1": "attack1.fbx",
+		"attack2": "attack2.fbx",
+		"attack3": "attack3.fbx",
+		"cast_fireball": "cast_fireball.fbx",
+		"cast_zap": "cast_zap.fbx",
+		"cast_unsummon": "cast_unsummon.fbx",
+		"cast_drain_life": "cast_drain_life.fbx",
+		"cast_giant_growth": "cast_giant_growth.fbx",
+		"cast_heal": "cast_heal.fbx",
+		"standing 1h magic attack 02": "standing_1h_magic_attack_02.fbx"
 	}
 	
 	var lib = AnimationLibrary.new()
 	for a_name in anim_names:
-		var path = "res://meshes/characters/shared/" + anim_names[a_name]
+		var path = "res://player_animations/" + anim_names[a_name]
 			
 		if ResourceLoader.exists(path):
 			var a_scene = load(path)
 			if a_scene:
 				var a_inst = a_scene.instantiate()
 				var a_player = a_inst.get_node_or_null("AnimationPlayer")
-				if a_player and a_player.has_animation("mixamo_com"):
-					var anim = a_player.get_animation("mixamo_com").duplicate()
-					anim.loop_mode = Animation.LOOP_LINEAR if (a_name != "jump" and not a_name.begins_with("attack") and a_name != "pickup" and a_name != "cast_fireball" and a_name != "cast_zap") else Animation.LOOP_NONE
+				if a_player:
+					var target_anim = "mixamo_com"
+					if not a_player.has_animation(target_anim):
+						for n in a_player.get_animation_list():
+							if n != "RESET":
+								target_anim = n
+								break
 					
-					# Remove horizontal root motion (X, Z) and stop sinking (Y) on attacks
-					for i in range(anim.get_track_count()):
-						if anim.track_get_type(i) == Animation.TYPE_POSITION_3D:
-							var base_y = null
-							if a_name.begins_with("attack") and anim.track_get_key_count(i) > 0:
-								var first_val = anim.track_get_key_value(i, 0)
-								if first_val is Vector3:
-									base_y = first_val.y
-							
-							for key_idx in range(anim.track_get_key_count(i)):
-								var val = anim.track_get_key_value(i, key_idx)
-								if val is Vector3:
-									val.x = 0
-									val.z = 0
-									if base_y != null:
-										val.y = base_y
-									anim.track_set_key_value(i, key_idx, val)
+					if a_player.has_animation(target_anim):
+						var anim = a_player.get_animation(target_anim).duplicate()
+						var no_loop_anims = ["jump", "jump_running", "pickup", "cast_fireball", "cast_zap", "cast_unsummon", "cast_drain_life", "cast_giant_growth", "cast_heal", "standing 1h magic attack 02"]
+						var is_attack = a_name.begins_with("attack")
+						if a_name in no_loop_anims or is_attack:
+							anim.loop_mode = Animation.LOOP_NONE
+						else:
+							anim.loop_mode = Animation.LOOP_LINEAR
+						
+						# Process root motion securely and dynamically extract walk/run speeds
+						for i in range(anim.get_track_count()):
+							if anim.track_get_type(i) == Animation.TYPE_POSITION_3D:
+								var track_path = String(anim.track_get_path(i))
+								# Only alter the main root/hips bone, leaving other bones (like hands/IK) completely intact
+								if not (track_path.contains("mixamorig_Hips") or track_path.contains("Root")):
+									continue
 									
-					lib.add_animation(a_name, anim)
+								var base_y = null
+								var base_x = null
+								var base_z = null
+								var first_val = null
+								var last_val = null
+								if anim.track_get_key_count(i) > 0:
+									first_val = anim.track_get_key_value(i, 0)
+									last_val = anim.track_get_key_value(i, anim.track_get_key_count(i) - 1)
+									if first_val is Vector3:
+										base_y = first_val.y
+										base_x = first_val.x
+										base_z = first_val.z
+								
+								# Dynamically extract intended movement speed from the forward animations
+								if a_name == "walk_forward" and first_val is Vector3 and last_val is Vector3:
+									var dist = Vector2(first_val.x, first_val.z).distance_to(Vector2(last_val.x, last_val.z))
+									if dist > 0.1 and anim.length > 0: speed = (dist / anim.length) * 1.25
+								elif a_name == "run_forward" and first_val is Vector3 and last_val is Vector3:
+									var dist = Vector2(first_val.x, first_val.z).distance_to(Vector2(last_val.x, last_val.z))
+									if dist > 0.1 and anim.length > 0: run_speed = (dist / anim.length) * 1.25
+								
+								# Stop sinking (Y) ONLY on attacks, but remove horizontal drift (X, Z) for ALL animations
+								var lock_y = a_name.begins_with("attack")
+								for key_idx in range(anim.track_get_key_count(i)):
+									var val = anim.track_get_key_value(i, key_idx)
+									if val is Vector3:
+										if base_x != null: val.x = base_x
+										if base_z != null: val.z = base_z
+										if lock_y and base_y != null: val.y = base_y
+										anim.track_set_key_value(i, key_idx, val)
+										
+						lib.add_animation(a_name, anim)
 				a_inst.queue_free()
 				
 	if current_anim_player.has_animation_library("actions"):
 		current_anim_player.remove_animation_library("actions")
 	current_anim_player.add_animation_library("actions", lib)
 	
-	play_anim("idle" + str(randi() % 3 + 1))
+	play_anim("idle1")
 
 func play_anim(anim_name: String):
 	if not current_anim_player or not current_anim_player.has_animation("actions/" + anim_name):
@@ -238,7 +388,7 @@ func play_anim(anim_name: String):
 	if is_multiplayer_authority() and not is_on_floor() and anim_name != "jump":
 		return
 		
-	var protected_anims = ["attack", "attack1", "attack2", "attack3", "pickup", "cast_fireball", "cast_zap"]
+	var protected_anims = ["attack", "attack1", "attack2", "attack3", "pickup", "cast_fireball", "cast_zap", "cast_unsummon", "cast_drain_life", "cast_giant_growth", "cast_heal", "standing 1h magic attack 02"]
 	
 	if current_animation in protected_anims and anim_name not in protected_anims:
 		if current_anim_player.is_playing() and current_anim_player.current_animation == "actions/" + current_animation:
@@ -291,9 +441,11 @@ func _unhandled_input(event):
 			
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			if is_giant_growth_active:
+				return
 			if spells[current_spell] == "fireball":
 				if event.pressed:
-					var base_cost = 20.0
+					var base_cost = 10.0
 					if current_cooldown <= 0 and mana >= base_cost:
 						mana -= base_cost
 						charged_mana = base_cost
@@ -318,8 +470,8 @@ func _unhandled_input(event):
 				var target_pos = info.target
 				var hit_path = info.hit_path
 				
-				if spells[current_spell] == "zap":
-					rpc("fire_zap", target_pos, hit_path)
+				if spells[current_spell] == "shock":
+					rpc("fire_shock", target_pos, hit_path)
 				elif spells[current_spell] == "unsummon":
 					rpc("fire_unsummon", target_pos, hit_path)
 				elif spells[current_spell] == "drain_life":
@@ -359,7 +511,7 @@ func _get_spell_target() -> Dictionary:
 	shapecast.shape.radius = 1.0
 	shapecast.target_position = to - from
 	shapecast.collision_mask = 4
-	shapecast.add_exception(self)
+	shapecast.add_exception(self )
 	shapecast.top_level = true
 	add_child(shapecast)
 	shapecast.global_position = from
@@ -382,7 +534,59 @@ func _get_spell_target() -> Dictionary:
 		if env_result.collider is Node:
 			hit_path = env_result.collider.get_path()
 			
-	return { "target": spell_target, "hit_path": hit_path }
+	return {"target": spell_target, "hit_path": hit_path}
+
+func _get_hands_midpoint() -> Vector3:
+	# Center point between both hand bones, pushed forward
+	if is_instance_valid(right_hand_attachment) and is_instance_valid(left_hand_attachment):
+		var left_pos = left_hand_attachment.global_position
+		var right_pos = right_hand_attachment.global_position
+		var mid = (right_pos + left_pos) / 2.0
+		
+		# Direction from right to left hand
+		var hand_dir = (left_pos - right_pos).normalized()
+		var char_forward = - visuals.global_transform.basis.z.normalized()
+		
+		# Project character's forward direction onto the plane perpendicular to the hands
+		# This guarantees the offset is strictly equidistant from both hands
+		var projected_forward = (char_forward - char_forward.project(hand_dir)).normalized()
+		
+		return mid + projected_forward * 0.25
+	return global_position + Vector3(0, 1.2, 0)
+
+func _get_spell_origin() -> Vector3:
+	if is_instance_valid(magic_essence_sphere):
+		return magic_essence_sphere.global_position
+	return _get_hands_midpoint()
+
+func _process(delta: float) -> void:
+	# Update drain visuals to stream from target to player's hand
+	for i in range(active_drain_visuals.size() - 1, -1, -1):
+		var v = active_drain_visuals[i]
+		if not is_instance_valid(v.particles) or not v.particles.emitting:
+			active_drain_visuals.remove_at(i)
+			continue
+			
+		var target = v.target_pos
+		if not v.hit_path.is_empty():
+			var n = get_node_or_null(v.hit_path)
+			if is_instance_valid(n):
+				target = n.global_position + Vector3(0, 1.0, 0)
+				
+		var hand = _get_spell_origin()
+		v.particles.global_position = target
+		
+		var dist = target.distance_to(hand)
+		v.particles.direction = (hand - target).normalized()
+		v.particles.initial_velocity_min = dist / v.particles.lifetime
+		v.particles.initial_velocity_max = dist / v.particles.lifetime
+
+	if is_instance_valid(magic_essence_sphere) and is_instance_valid(right_hand_attachment):
+		var target_pos: Vector3 = _get_hands_midpoint()
+		if magic_essence_sphere.global_position.distance_squared_to(target_pos) > 4.0:
+			magic_essence_sphere.global_position = target_pos
+		else:
+			magic_essence_sphere.global_position = magic_essence_sphere.global_position.lerp(target_pos, 15.0 * delta)
 
 func _physics_process(delta):
 	# Sync player character dynamically if changed (late joiners etc)
@@ -414,7 +618,7 @@ func _physics_process(delta):
 			cooldown_ui.position = v_size / 2.0
 			
 	if is_charging_fireball:
-		var drain_rate = 25.0
+		var drain_rate = 22.5
 		var drain_amount = drain_rate * delta
 		if mana >= drain_amount and charged_mana + drain_amount <= 100.0:
 			mana -= drain_amount
@@ -439,16 +643,12 @@ func _physics_process(delta):
 	var is_running = Input.is_key_pressed(KEY_SHIFT)
 	var current_speed = run_speed if is_running else speed
 	
-	# Movement vectors (only forward/backwards)
+	# Movement vectors (forward/back and left/right)
 	var forward_dir = Input.get_axis("move_forward", "move_back")
-	var direction = (transform.basis * Vector3(0, 0, forward_dir)).normalized()
+	var strafe_dir = Input.get_axis("move_left", "move_right") # A is negative, D is positive
+	var direction = (transform.basis * Vector3(strafe_dir, 0, forward_dir)).normalized()
 	
-	# Keyboard turning
-	var turn_dir = Input.get_axis("move_right", "move_left")
-	if turn_dir != 0:
-		rotate_y(turn_dir * 3.0 * delta)
-	
-	var is_acting = (current_animation.begins_with("attack") or current_animation == "pickup" or current_animation == "cast_fireball" or current_animation == "cast_zap") and current_anim_player and current_anim_player.is_playing() and current_anim_player.current_animation == "actions/" + current_animation
+	var is_acting = (current_animation.begins_with("attack") or current_animation == "pickup" or current_animation.begins_with("cast_")) and current_anim_player and current_anim_player.is_playing() and current_anim_player.current_animation == "actions/" + current_animation
 	
 	if is_acting:
 		velocity.x = move_toward(velocity.x, 0, current_speed)
@@ -456,32 +656,59 @@ func _physics_process(delta):
 	elif direction != Vector3.ZERO:
 		velocity.x = direction.x * current_speed
 		velocity.z = direction.z * current_speed
-		var target_look = visuals.global_position + direction
-		# Project to XZ plane
-		target_look.y = visuals.global_position.y
-		visuals.look_at(target_look, Vector3.UP)
-		visuals.rotation.x = 0
-		visuals.rotation.z = 0
 		
-		if is_on_floor():
-			play_anim("run" if is_running else "walk")
+		var is_jumping_windup = jump_delay_timer > 0
+		if is_on_floor() and not is_jumping_windup:
+			var anim_to_play = "idle"
+			if is_running:
+				if forward_dir < 0: anim_to_play = "run_forward"
+				elif forward_dir > 0: anim_to_play = "run_back"
+				elif strafe_dir < 0: anim_to_play = "run_left"
+				elif strafe_dir > 0: anim_to_play = "run_right"
+			else:
+				if forward_dir < 0: anim_to_play = "walk_forward"
+				elif forward_dir > 0: anim_to_play = "walk_back"
+				elif strafe_dir < 0: anim_to_play = "walk_left"
+				elif strafe_dir > 0: anim_to_play = "walk_right"
+				
+			if anim_to_play != "idle":
+				play_anim(anim_to_play)
 	else:
 		velocity.x = move_toward(velocity.x, 0, current_speed)
 		velocity.z = move_toward(velocity.z, 0, current_speed)
-		if is_on_floor():
-			if turn_dir > 0:
-				play_anim("turn_left")
-			elif turn_dir < 0:
-				play_anim("turn_right")
-			else:
-				if not current_animation.begins_with("idle"):
-					play_anim("idle" + str(randi() % 3 + 1))
+		var is_jumping_windup = jump_delay_timer > 0
+		if is_on_floor() and not is_jumping_windup:
+			var target_idle = "idle3" if is_charging_fireball else "idle1"
+			if current_animation != target_idle:
+				play_anim(target_idle)
+			
+	if jump_delay_timer > 0:
+		jump_delay_timer -= delta
+		if jump_delay_timer <= 0:
+			velocity.y = pending_jump_force
+			
+	if Input.is_key_pressed(KEY_SPACE) and is_on_floor() and not is_acting and jump_delay_timer <= 0 and current_animation != "jump" and current_animation != "jump_running":
+		jump_delay_timer = 0.75
+		if is_running or Vector2(velocity.x, velocity.z).length() > 0.1:
+			play_anim("jump_running")
+			pending_jump_force = 5.0
+		else:
+			play_anim("jump")
+			pending_jump_force = 2.5
 		
-	if Input.is_key_pressed(KEY_SPACE) and is_on_floor() and not is_acting:
-		velocity.y = 5.0
-		
+	var was_in_air = not is_on_floor()
+	
 	if not is_on_floor():
-		play_anim("jump")
+		if velocity.y < 0 and current_anim_player.current_animation.begins_with("actions/jump"):
+			# To simulate a falling state without a dedicated animation, we can let the jump animation 
+			# reach its final frame naturally (since it's now set to LOOP_NONE).
+			pass
+			
+		if current_animation != "jump" and current_animation != "jump_running":
+			if is_running or Vector2(velocity.x, velocity.z).length() > 0.1:
+				play_anim("jump_running")
+			else:
+				play_anim("jump")
 	
 	move_and_slide()
 
@@ -521,7 +748,7 @@ func trigger_anim(anim_name: String):
 		query.shape = sphere
 		query.transform = Transform3D(Basis(), from + forward * 1.5)
 		query.collision_mask = 4
-		query.exclude = [self.get_rid()]
+		query.exclude = [ self.get_rid()]
 		
 		var results = space_state.intersect_shape(query)
 		var hit_collider = null
@@ -537,77 +764,134 @@ func trigger_anim(anim_name: String):
 		else:
 			play_sound("res://sounds/punsh-miss.wav")
 
-@rpc("any_peer", "call_local", "reliable")
-func fire_zap(target_pos: Vector3, hit_path: NodePath = NodePath()):
-	play_anim("cast_fireball")
-	await get_tree().create_timer(1.2).timeout
-	
-	play_sound("res://sounds/lightning-bolt" + str(randi() % 2 + 1) + ".wav")
-	
-	if multiplayer.is_server() and not hit_path.is_empty():
-		var hit_node = get_node_or_null(hit_path)
-		if hit_node and hit_node.has_method("take_damage"):
-			var dir = (target_pos - global_position).normalized()
-			hit_node.take_damage(15.0 * damage_multiplier, dir)
-			if hit_node.has_method("gain_aggro"):
-				hit_node.gain_aggro(self )
-	
-	var timer = get_tree().create_timer(0.15)
-	timer.timeout.connect(func():
-		if left_hand_attachment:
-			var start_pos = left_hand_attachment.global_position
-			create_zap_visual(start_pos, target_pos)
-	)
+func start_magic_sphere_pulse():
+	if is_instance_valid(magic_essence_sphere):
+		if magic_pulse_tween: magic_pulse_tween.kill()
+		magic_pulse_tween = create_tween().set_loops()
+		magic_pulse_tween.tween_property(magic_essence_sphere, "scale", Vector3(4.5, 4.5, 4.5), 0.15).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		magic_pulse_tween.tween_property(magic_essence_sphere, "scale", Vector3(3.5, 3.5, 3.5), 0.15).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
-var charging_effect = null
+func stop_magic_sphere_pulse():
+	if is_instance_valid(magic_essence_sphere):
+		if magic_pulse_tween: magic_pulse_tween.kill()
+		magic_pulse_tween = create_tween()
+		magic_pulse_tween.tween_property(magic_essence_sphere, "scale", Vector3(1.0, 1.0, 1.0), 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+
+@rpc("any_peer", "call_local", "reliable")
+func fire_shock(target_pos: Vector3, hit_path: NodePath = NodePath()):
+	start_magic_sphere_pulse()
+	play_anim("cast_drain_life")
+	await get_tree().create_timer(1.0).timeout
+	
+	var end_time = Time.get_ticks_msec() + 2000
+	var next_damage_time = Time.get_ticks_msec()
+	var current_target_pos = target_pos
+	var active_sounds = []
+	
+	while Time.get_ticks_msec() < end_time and is_inside_tree():
+		var hit_node = null
+		if not hit_path.is_empty():
+			hit_node = get_node_or_null(hit_path)
+			if is_instance_valid(hit_node) and hit_node.is_inside_tree():
+				current_target_pos = hit_node.global_position + Vector3(0, 1.0, 0)
+				
+		var start_pos = _get_spell_origin()
+		var random_offset = Vector3(randf_range(-0.5, 0.5), randf_range(-0.5, 0.5), randf_range(-0.5, 0.5))
+		create_shock_visual(start_pos, current_target_pos + random_offset)
+		
+		if randf() < 0.4:
+			var s = play_sound("res://sounds/shock-" + str(randi() % 3 + 1) + ".wav", -15.0)
+			if s: active_sounds.append(s)
+			
+		if multiplayer.is_server() and is_instance_valid(hit_node) and hit_node.has_method("take_damage"):
+			if Time.get_ticks_msec() >= next_damage_time:
+				var dir = (current_target_pos - global_position).normalized()
+				dir.y = 0.0
+				if dir == Vector3.ZERO: dir = Vector3.FORWARD
+				else: dir = dir.normalized()
+				hit_node.take_damage(5.0 * damage_multiplier, dir * 0.1)
+				if hit_node.has_method("apply_stun"):
+					hit_node.rpc("apply_stun", 0.5)
+				if hit_node.has_method("gain_aggro"):
+					hit_node.gain_aggro(self)
+				next_damage_time = Time.get_ticks_msec() + 400 # 5 ticks over 2 seconds (25 base damage)
+				
+		await get_tree().create_timer(randf_range(0.05, 0.15)).timeout
+
+	stop_magic_sphere_pulse()
+
+	for s in active_sounds:
+		if is_instance_valid(s) and s.playing:
+			var tween = create_tween()
+			tween.tween_interval(0.5)
+			tween.tween_property(s, "volume_db", -80.0, 0.5)
+			tween.tween_callback(func():
+				if is_instance_valid(s):
+					s.stop()
+					s.queue_free()
+			)
 
 @rpc("any_peer", "call_local", "reliable")
 func start_charge_fireball():
-	play_anim("cast_fireball")
-	play_sound("res://sounds/fireball.wav")
+	if charge_audio_player == null:
+		charge_audio_player = AudioStreamPlayer3D.new()
+		charge_audio_player.bus = "SFX"
+		add_child(charge_audio_player)
+	charge_audio_player.volume_db = -20.0
+	charge_audio_player.stream = load("res://sounds/fireball-charging.wav")
+	charge_audio_player.play()
 	
-	if left_hand_attachment:
-		charging_effect = Node3D.new()
-		left_hand_attachment.add_child(charging_effect)
-		
-		var mesh_inst = MeshInstance3D.new()
-		var mesh = SphereMesh.new()
-		mesh.radius = 0.25
-		mesh.height = 0.5
-		mesh_inst.mesh = mesh
-		var mat = StandardMaterial3D.new()
-		mat.albedo_color = Color(1.0, 0.8, 0.2)
-		mat.emission_enabled = true
-		mat.emission = Color(1.0, 0.9, 0.4)
-		mat.emission_energy_multiplier = 5.0
-		mesh_inst.material_override = mat
-		charging_effect.add_child(mesh_inst)
-		
-		charging_effect.scale = Vector3.ONE * 0.2
-
 @rpc("any_peer", "call_local", "unreliable")
 func update_charge_visual(mana_amount: float):
-	if is_instance_valid(charging_effect):
-		var s = 0.2 + (mana_amount / 100.0) * 1.8
-		charging_effect.scale = Vector3.ONE * s
+	if is_instance_valid(magic_essence_sphere):
+		var charge_ratio = (mana_amount - 10.0) / 90.0
+		var s = 1.0 + charge_ratio * 3.0
+		magic_essence_sphere.scale = Vector3.ONE * s
+		
+		if is_instance_valid(magic_essence_particles):
+			magic_essence_particles.initial_velocity_min = 0.05 + charge_ratio * 1.5
+			magic_essence_particles.initial_velocity_max = 0.2 + charge_ratio * 4.0
+			magic_essence_particles.radial_accel_min = charge_ratio * 5.0
+			magic_essence_particles.radial_accel_max = charge_ratio * 10.0
+			magic_essence_particles.scale_amount_max = 1.8 + charge_ratio * 2.0
 
 @rpc("any_peer", "call_local", "reliable")
 func release_fireball(target_pos: Vector3, mana_amount: float):
-	if is_instance_valid(charging_effect):
-		charging_effect.queue_free()
+	if charge_audio_player and charge_audio_player.playing:
+		var audio_tween = create_tween()
+		audio_tween.tween_property(charge_audio_player, "volume_db", -80.0, 1.0)
+		audio_tween.tween_callback(func(): charge_audio_player.stop())
 		
-	if left_hand_attachment:
-		var start_pos = left_hand_attachment.global_position
-		var dmg_mult = mana_amount / 20.0
-		create_fireball(start_pos, target_pos, dmg_mult)
+	play_anim("cast_fireball")
+	
+	if is_instance_valid(magic_essence_sphere):
+		var tween = create_tween()
+		tween.tween_property(magic_essence_sphere, "scale", Vector3.ONE, 0.3).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		
+		if is_instance_valid(magic_essence_particles):
+			magic_essence_particles.initial_velocity_min = 0.05
+			magic_essence_particles.initial_velocity_max = 0.2
+			magic_essence_particles.radial_accel_min = 0.0
+			magic_essence_particles.radial_accel_max = 0.0
+			magic_essence_particles.scale_amount_max = 1.8
+			
+	# Delay fireball spawn to match animation peak
+	await get_tree().create_timer(0.3).timeout
+		
+	var start_pos = _get_spell_origin()
+	create_fireball(start_pos, target_pos, mana_amount)
+	
+	# Delay fireball sound to 0.5s
+	await get_tree().create_timer(0.2).timeout
+	play_sound("res://sounds/fireball.wav", -10.0)
 
-func create_fireball(start_pos: Vector3, target_pos: Vector3, charge_mult: float = 1.0):
+func create_fireball(start_pos: Vector3, target_pos: Vector3, mana_amount: float = 10.0):
 	var area = Area3D.new()
 	area.collision_mask = 5
 	area.collision_layer = 0
 	area.set_script(FIREBALL_SCRIPT)
 	area.set("direction", (target_pos - start_pos).normalized())
-	area.set("damage", 40.0 * damage_multiplier * charge_mult)
+	area.set("damage", mana_amount * damage_multiplier)
 	
 	var shape = CollisionShape3D.new()
 	var sphere = SphereShape3D.new()
@@ -650,12 +934,53 @@ func create_fireball(start_pos: Vector3, target_pos: Vector3, charge_mult: float
 	light.omni_range = 10.0
 	area.add_child(light)
 	
-	# Scale visuals by charge_mult
+	# Shimmer Effect
+	var heat_inst = MeshInstance3D.new()
+	var heat_mesh = SphereMesh.new()
+	heat_mesh.radius = 0.65
+	heat_mesh.height = 1.3
+	var heat_mat = ShaderMaterial.new()
+	var shader = Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode unshaded;
+uniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_linear;
+
+void fragment() {
+	float edge = 1.0 - dot(NORMAL, VIEW);
+	float mask = smoothstep(1.0, 0.0, edge);
+	float wobble = sin(TIME * 8.0 + UV.y * 20.0) * cos(TIME * 5.0 + UV.x * 20.0);
+	vec2 uv = SCREEN_UV + (wobble * 0.001 * mask);
+	ALBEDO = texture(screen_texture, uv).rgb;
+}
+"""
+	heat_mat.shader = shader
+	heat_mesh.material = heat_mat
+	heat_inst.mesh = heat_mesh
+	heat_inst.sorting_offset = -10.0
+	area.add_child(heat_inst)
+	
+	# Calculate visual scale based on mana amount (10 -> 1.0x, 100 -> 4.0x)
+	var charge_mult = 1.0 + clamp((mana_amount - 10.0) / 90.0, 0.0, 1.0) * 3.0
+	
+	# Scale visuals by charge_mult smoothly
 	shape.scale = Vector3.ONE * min(charge_mult, 3.0) # Clamp collision scaling to prevent floor scraping
-	mesh_inst.scale = Vector3.ONE * charge_mult
-	outer_inst.scale = Vector3.ONE * charge_mult
-	light.omni_range = 10.0 * charge_mult
-	light.light_energy = 5.0 * charge_mult
+	var start_scale = Vector3(0.01, 0.01, 0.01)
+	mesh_inst.scale = start_scale
+	outer_inst.scale = start_scale
+	heat_inst.scale = start_scale
+	light.omni_range = 0.0
+	light.light_energy = 0.0
+	
+	area.position = start_pos
+	get_tree().root.add_child(area)
+	
+	var tween = create_tween().set_parallel(true)
+	tween.tween_property(mesh_inst, "scale", Vector3.ONE * charge_mult, 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(outer_inst, "scale", Vector3.ONE * charge_mult, 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(heat_inst, "scale", Vector3.ONE * charge_mult, 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(light, "omni_range", 10.0 * charge_mult, 0.2)
+	tween.tween_property(light, "light_energy", 5.0 * charge_mult, 0.2)
 	
 	var particles = CPUParticles3D.new()
 	particles.amount = 60
@@ -691,11 +1016,8 @@ func create_fireball(start_pos: Vector3, target_pos: Vector3, charge_mult: float
 	p_mesh.material = p_mat
 	particles.mesh = p_mesh
 	area.add_child(particles)
-	
-	get_tree().root.add_child(area)
-	area.global_position = start_pos
 
-func create_zap_visual(start_pos: Vector3, end_pos: Vector3):
+func create_shock_visual(start_pos: Vector3, end_pos: Vector3):
 	var distance = start_pos.distance_to(end_pos)
 	
 	# Create a container node to hold both the beam and the impact effects
@@ -722,9 +1044,9 @@ func create_zap_visual(start_pos: Vector3, end_pos: Vector3):
 	beam.rotation.x = PI / 2.0
 	
 	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0.6, 0.9, 1.0)
+	mat.albedo_color = Color(1.0, 0.6, 0.6)
 	mat.emission_enabled = true
-	mat.emission = Color(0.2, 0.8, 1.0)
+	mat.emission = Color(1.0, 0.2, 0.2)
 	mat.emission_energy_multiplier = 15.0
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.albedo_color.a = 0.8
@@ -743,9 +1065,9 @@ func create_zap_visual(start_pos: Vector3, end_pos: Vector3):
 	beam_aura.position.z = - distance / 2.0
 	beam_aura.rotation.x = PI / 2.0
 	var mat_aura = StandardMaterial3D.new()
-	mat_aura.albedo_color = Color(0.2, 0.6, 1.0, 0.3)
+	mat_aura.albedo_color = Color(1.0, 0.2, 0.2, 0.3)
 	mat_aura.emission_enabled = true
-	mat_aura.emission = Color(0.1, 0.4, 1.0)
+	mat_aura.emission = Color(1.0, 0.1, 0.1)
 	mat_aura.emission_energy_multiplier = 4.0
 	mat_aura.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	beam_aura.material_override = mat_aura
@@ -753,8 +1075,8 @@ func create_zap_visual(start_pos: Vector3, end_pos: Vector3):
 	
 	# Particle Mesh (reused for muzzle and impact)
 	var p_mesh = SphereMesh.new()
-	p_mesh.radius = 0.05
-	p_mesh.height = 0.1
+	p_mesh.radius = 0.015
+	p_mesh.height = 0.03
 	p_mesh.radial_segments = 8
 	p_mesh.rings = 4
 	
@@ -764,19 +1086,19 @@ func create_zap_visual(start_pos: Vector3, end_pos: Vector3):
 	
 	var grad = Gradient.new()
 	grad.offsets = PackedFloat32Array([0.0, 0.2, 1.0])
-	grad.colors = PackedColorArray([Color(1, 1, 1), Color(0.2, 0.8, 1.0), Color(0.0, 0.2, 1.0, 0.0)])
+	grad.colors = PackedColorArray([Color(1, 1, 1), Color(1.0, 0.2, 0.2), Color(1.0, 0.0, 0.0, 0.0)])
 	
 	var p_mat = StandardMaterial3D.new()
 	p_mat.vertex_color_use_as_albedo = true
 	p_mat.albedo_color = Color(1, 1, 1)
 	p_mat.emission_enabled = true
-	p_mat.emission = Color(0.2, 0.8, 1.0)
+	p_mat.emission = Color(1.0, 0.2, 0.2)
 	p_mat.emission_energy_multiplier = 10.0
 	p_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	
 	# Muzzle Flash
 	var muzzle = CPUParticles3D.new()
-	muzzle.amount = 40
+	muzzle.amount = 150
 	muzzle.lifetime = 0.3
 	muzzle.explosiveness = 1.0
 	muzzle.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
@@ -795,7 +1117,7 @@ func create_zap_visual(start_pos: Vector3, end_pos: Vector3):
 	
 	# Impact Light
 	var light = OmniLight3D.new()
-	light.light_color = Color(0.2, 0.8, 1.0)
+	light.light_color = Color(1.0, 0.2, 0.2)
 	light.light_energy = 8.0
 	light.omni_range = 5.0
 	light.position.z = - distance
@@ -803,7 +1125,7 @@ func create_zap_visual(start_pos: Vector3, end_pos: Vector3):
 	
 	# Impact Sparkles
 	var sparkles = CPUParticles3D.new()
-	sparkles.amount = 60
+	sparkles.amount = 250
 	sparkles.lifetime = 0.5
 	sparkles.explosiveness = 1.0
 	sparkles.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
@@ -900,21 +1222,65 @@ func _on_cooldown_draw():
 		
 		cooldown_ui.draw_arc(center, radius, 0, PI * 2.0, 64, Color(1, 1, 1, 0.1), 4.0, true)
 		cooldown_ui.draw_arc(center, radius, angle_from, angle_to, 64, Color(1, 1, 1, 0.4), 4.0, true)
-	
-	_update_spell_ui()
 
 func _update_spell_ui():
 	if spell_label:
 		var s_name = spells[current_spell].capitalize()
 		var cost = spell_costs.get(spells[current_spell], 0.0)
 		spell_label.text = s_name + " (Mana: " + str(cost) + ")"
+		
+	if right_hand_attachment and is_instance_valid(magic_essence_particles):
+		magic_essence_particles.initial_velocity_min = 0.05
+		magic_essence_particles.initial_velocity_max = 0.2
+		magic_essence_particles.radial_accel_min = 0.0
+		magic_essence_particles.radial_accel_max = 0.0
+		magic_essence_particles.scale_amount_max = 1.8
+		
+		if is_instance_valid(magic_essence_sphere):
+			magic_essence_sphere.scale = Vector3.ONE
+			
+		var spell = spells[current_spell]
+		var color = Color(1, 1, 1)
+		if spell == "shock": color = Color(1.0, 0.1, 0.1)
+		elif spell == "fireball": color = Color(1.0, 0.4, 0.1)
+		elif spell == "unsummon": color = Color(0.3, 0.6, 1.0)
+		elif spell == "drain_life": color = Color(0.1, 0.0, 0.15)
+		elif spell == "giant_growth": color = Color(0.2, 0.9, 0.2)
+		elif spell == "heal": color = Color(1.0, 0.95, 0.7)
+		
+		var grad = Gradient.new()
+		if spell == "drain_life":
+			grad.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
+			grad.colors = PackedColorArray([Color(0.01, 0.0, 0.02), color, Color(color.r, color.g, color.b, 0.0)])
+			magic_essence_particles.color_ramp = grad
+			magic_essence_particles.color = color
+			
+			if magic_essence_particles.mesh and magic_essence_particles.mesh.material:
+				magic_essence_particles.mesh.material.emission = color
+			if magic_essence_sphere and magic_essence_sphere.mesh and magic_essence_sphere.mesh.material:
+				magic_essence_sphere.mesh.material.albedo_color = Color.BLACK
+				magic_essence_sphere.mesh.material.emission = Color.BLACK
+		else:
+			grad.offsets = PackedFloat32Array([0.0, 0.2, 1.0])
+			grad.colors = PackedColorArray([Color.WHITE, color, Color(color.r, color.g, color.b, 0.0)])
+			magic_essence_particles.color_ramp = grad
+			magic_essence_particles.color = Color.WHITE
+			
+			if magic_essence_particles.mesh and magic_essence_particles.mesh.material:
+				magic_essence_particles.mesh.material.emission = Color.WHITE
+			if magic_essence_sphere and magic_essence_sphere.mesh and magic_essence_sphere.mesh.material:
+				magic_essence_sphere.mesh.material.albedo_color = color
+				magic_essence_sphere.mesh.material.emission = color
+				
+		if magic_essence_light:
+			magic_essence_light.light_color = color
 
 func add_mana(amount: float):
 	if is_multiplayer_authority():
 		mana = min(mana + amount, max_mana)
 		if mana_bar: mana_bar.value = mana
 
-func play_sound(path: String, volume_db: float = 0.0):
+func play_sound(path: String, volume_db: float = 0.0) -> AudioStreamPlayer3D:
 	var audio = AudioStreamPlayer3D.new()
 	if not sound_cache.has(path):
 		sound_cache[path] = load(path)
@@ -925,6 +1291,10 @@ func play_sound(path: String, volume_db: float = 0.0):
 		add_child(audio)
 		audio.play()
 		audio.finished.connect(audio.queue_free)
+		return audio
+	else:
+		audio.queue_free()
+	return null
 
 func _sync_remote_animations(delta):
 	var movement = position - last_position
@@ -945,7 +1315,7 @@ func _sync_remote_animations(delta):
 	last_rotation_y = rotation.y
 	
 	var smooth_speed = remote_velocity.length()
-	var is_acting = (current_animation.begins_with("attack") or current_animation == "pickup" or current_animation == "cast_fireball" or current_animation == "cast_zap") and current_anim_player and current_anim_player.is_playing() and current_anim_player.current_animation == "actions/" + current_animation
+	var is_acting = (current_animation.begins_with("attack") or current_animation == "pickup" or current_animation.begins_with("cast_") or current_animation.begins_with("standing")) and current_anim_player and current_anim_player.is_playing() and current_anim_player.current_animation == "actions/" + current_animation
 	
 	if is_acting:
 		return
@@ -961,63 +1331,106 @@ func _sync_remote_animations(delta):
 		elif remote_turn_speed < -0.5:
 			play_anim("turn_right")
 		else:
-			if not current_animation.begins_with("idle"):
-				play_anim("idle" + str(randi() % 3 + 1))
+			var target_idle = "idle3" if is_charging_fireball else "idle1"
+			if current_animation != target_idle:
+				play_anim(target_idle)
 
 # --- NEW SPELLS ---
 
 @rpc("any_peer", "call_local", "reliable")
 func fire_unsummon(target_pos: Vector3, hit_path: NodePath = NodePath()):
-	play_anim("cast_fireball")
-	await get_tree().create_timer(1.2).timeout
-	
-	play_sound("res://sounds/punch1.wav")
-	if multiplayer.is_server() and not hit_path.is_empty():
-		var hit_node = get_node_or_null(hit_path)
-		if hit_node and hit_node.has_method("take_damage"):
-			var dir = (target_pos - global_position).normalized()
-			# Huge knockback (dir * 5.0), low damage
-			hit_node.take_damage(5.0 * damage_multiplier, dir * 5.0)
-			if hit_node.has_method("gain_aggro"):
-				hit_node.gain_aggro(self )
+	start_magic_sphere_pulse()
+	play_anim("standing 1h magic attack 02")
+	await get_tree().create_timer(0.5).timeout
+	play_sound("res://sounds/unsummon.wav", 5.0) # Play the unsummon sound effect
+	if multiplayer.is_server():
+		var space_state = get_world_3d().direct_space_state
+		var from = visuals.global_position + Vector3(0, 1.0, 0)
+		var forward = -visuals.global_transform.basis.z.normalized()
+		
+		# Large spherecast in front of the player
+		var shape = SphereShape3D.new()
+		shape.radius = 3.5
+		var query = PhysicsShapeQueryParameters3D.new()
+		query.shape = shape
+		query.transform = Transform3D(Basis(), from + forward * 3.5)
+		query.collision_mask = 4 # Enemies
+		query.exclude = [self.get_rid()]
+		
+		var results = space_state.intersect_shape(query)
+		for res in results:
+			var hit_node = res.collider
+			if hit_node and hit_node.has_method("take_damage"):
+				var push_dir = -visuals.global_transform.basis.z.normalized()
+				push_dir.y = 0.02 # Reduced vertical lift by 5x
+				push_dir = push_dir.normalized()
+				
+				# knockback_dir is multiplied by 10.0 in Enemy.gd, so 12.0 results in a 120.0 velocity horizontal push
+				hit_node.take_damage(0.0, push_dir * 12.0)
+				if hit_node.has_method("gain_aggro"):
+					hit_node.gain_aggro(self)
 			
 	var timer = get_tree().create_timer(0.15)
 	timer.timeout.connect(func():
-		if left_hand_attachment:
-			create_unsummon_visual(left_hand_attachment.global_position, target_pos)
+		var forward = -visuals.global_transform.basis.z.normalized()
+		var end_pos = _get_spell_origin() + forward * 10.0
+		create_unsummon_visual(_get_spell_origin(), end_pos)
+		stop_magic_sphere_pulse()
 	)
 
 @rpc("any_peer", "call_local", "reliable")
 func fire_drain_life(target_pos: Vector3, hit_path: NodePath = NodePath()):
-	play_anim("cast_fireball")
-	await get_tree().create_timer(1.2).timeout
-	
+	start_magic_sphere_pulse()
+	play_anim("cast_drain_life")
 	play_sound("res://sounds/lifedrain.wav")
+	
+	# Wait 1 second before first damage tick and visual stream
+	await get_tree().create_timer(1.0).timeout
+	
+	create_drain_visual(_get_spell_origin(), target_pos, 1.5, hit_path)
+	
 	if multiplayer.is_server() and not hit_path.is_empty():
 		var hit_node = get_node_or_null(hit_path)
-		if hit_node and hit_node.has_method("take_damage"):
-			var dir = (target_pos - global_position).normalized()
-			hit_node.take_damage(30.0 * damage_multiplier, dir)
-			health = min(health + 30.0, max_health)
-			if hit_node.has_method("gain_aggro"):
-				hit_node.gain_aggro(self )
-			
-	var timer = get_tree().create_timer(0.15)
-	timer.timeout.connect(func():
-		if left_hand_attachment:
-			create_drain_visual(left_hand_attachment.global_position, target_pos)
-	)
+		
+		var max_damage = 30.0 * damage_multiplier
+		var total_damage_dealt = 0.0
+		var tick_damage = max_damage / 30.0 # 30 fast ticks to reach max damage
+		
+		# Deal continuous small damage until max is reached or animation ends
+		while is_instance_valid(hit_node) and current_anim_player and current_anim_player.current_animation == "actions/cast_drain_life" and total_damage_dealt < max_damage:
+			if hit_node.has_method("take_damage"):
+				var dir = (hit_node.global_position - global_position).normalized()
+				# Very low knockback since we are hitting them 30 times rapidly
+				hit_node.take_damage(tick_damage, dir * 0.05)
+				health = min(health + tick_damage, max_health)
+				total_damage_dealt += tick_damage
+				if hit_node.has_method("gain_aggro"):
+					hit_node.gain_aggro(self )
+			await get_tree().create_timer(0.05).timeout
+	
+	stop_magic_sphere_pulse()
 
 @rpc("any_peer", "call_local", "reliable")
 func cast_giant_growth():
-	play_anim("cast_fireball")
-	await get_tree().create_timer(1.5).timeout
+	start_magic_sphere_pulse()
+	play_anim("cast_giant_growth")
+	await get_tree().create_timer(1.25).timeout
 	
 	play_sound("res://sounds/giant-growth.wav")
 	
 	# Grow bigger over 0.5s
+	stop_magic_sphere_pulse()
+	is_giant_growth_active = true
 	var tween = create_tween().set_parallel(true)
 	tween.tween_property(self , "scale", Vector3(2.0, 2.0, 2.0), 0.5)
+	if is_instance_valid(magic_essence_sphere) and magic_essence_sphere.mesh and magic_essence_sphere.mesh.material:
+		tween.tween_property(magic_essence_sphere.mesh.material, "albedo_color:a", 0.0, 0.5)
+		tween.tween_property(magic_essence_sphere.mesh.material, "emission_energy_multiplier", 0.0, 0.5)
+	if is_instance_valid(magic_essence_light):
+		tween.tween_property(magic_essence_light, "light_energy", 0.0, 0.5)
+	if is_instance_valid(magic_essence_particles):
+		magic_essence_particles.emitting = false
+		
 	damage_multiplier = 3.0
 	
 	# Slow animations for heavy feel
@@ -1034,8 +1447,17 @@ func cast_giant_growth():
 	await get_tree().create_timer(15.0).timeout
 	
 	# Revert
+	is_giant_growth_active = false
 	var tween2 = create_tween().set_parallel(true)
 	tween2.tween_property(self , "scale", Vector3(1, 1, 1), 0.5)
+	if is_instance_valid(magic_essence_sphere) and magic_essence_sphere.mesh and magic_essence_sphere.mesh.material:
+		tween2.tween_property(magic_essence_sphere.mesh.material, "albedo_color:a", 1.0, 0.5)
+		tween2.tween_property(magic_essence_sphere.mesh.material, "emission_energy_multiplier", 5.0, 0.5)
+	if is_instance_valid(magic_essence_light):
+		tween2.tween_property(magic_essence_light, "light_energy", 1.0, 0.5)
+	if is_instance_valid(magic_essence_particles):
+		magic_essence_particles.emitting = true
+		
 	damage_multiplier = 1.0
 	max_health -= 50.0
 	health = min(health, max_health)
@@ -1044,8 +1466,9 @@ func cast_giant_growth():
 
 @rpc("any_peer", "call_local", "reliable")
 func cast_heal():
-	play_anim("cast_fireball")
-	await get_tree().create_timer(1.5).timeout
+	start_magic_sphere_pulse()
+	play_anim("cast_heal")
+	await get_tree().create_timer(0.5).timeout
 	
 	play_sound("res://sounds/heal1.wav")
 	health = min(health + 50.0, max_health)
@@ -1056,20 +1479,13 @@ func cast_heal():
 			base.health = min(base.health + 50.0, base.max_health)
 			
 	create_heal_visual(global_position)
+	stop_magic_sphere_pulse()
 
 @rpc("any_peer", "call_local", "reliable")
 func take_damage(amount: float, knockback_dir: Vector3 = Vector3.ZERO):
 	if is_multiplayer_authority():
 		health = max(0, health - amount)
 		if health_bar: health_bar.value = health
-		
-		# Slight red flash
-		var tween = create_tween()
-		tween.tween_property($Visuals, "scale", Vector3(0.9, 0.9, 0.9), 0.1)
-		tween.tween_property($Visuals, "scale", Vector3(1, 1, 1), 0.1)
-		
-		# Knockback
-		velocity += knockback_dir * 5.0
 		
 		if health <= 0:
 			die()
@@ -1080,11 +1496,9 @@ func die():
 	if health_bar: health_bar.value = health
 
 
-
 # --- VISUAL EFFECTS ---
 
 func create_unsummon_visual(start_pos: Vector3, end_pos: Vector3):
-	var distance = start_pos.distance_to(end_pos)
 	var container = Node3D.new()
 	get_tree().root.add_child(container)
 	container.global_position = start_pos
@@ -1092,71 +1506,185 @@ func create_unsummon_visual(start_pos: Vector3, end_pos: Vector3):
 	if abs((end_pos - start_pos).normalized().y) > 0.99: up = Vector3.RIGHT
 	container.look_at(end_pos, up)
 	
-	var splash = CPUParticles3D.new()
-	splash.amount = 40
-	splash.lifetime = 0.5
-	splash.explosiveness = 0.9
-	splash.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
-	splash.emission_sphere_radius = 0.5
-	splash.spread = 180.0
-	splash.initial_velocity_min = 8.0
-	splash.initial_velocity_max = 12.0
-	splash.damping_min = 5.0
-	splash.damping_max = 10.0
-	var p_mesh = SphereMesh.new()
-	p_mesh.radius = 0.2
-	p_mesh.height = 0.4
-	var p_mat = StandardMaterial3D.new()
-	p_mat.albedo_color = Color(0.1, 0.4, 1.0, 0.8)
-	p_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	p_mesh.material = p_mat
-	splash.mesh = p_mesh
-	splash.position.z = - distance
-	container.add_child(splash)
-	splash.emitting = true
+	# 1. Wind Streaks
+	var wind_streaks = CPUParticles3D.new()
+	wind_streaks.amount = 60
+	wind_streaks.lifetime = 0.4
+	wind_streaks.explosiveness = 0.8
+	wind_streaks.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	wind_streaks.emission_sphere_radius = 1.0
+	wind_streaks.direction = Vector3(0, 0, -1)
+	wind_streaks.spread = 15.0
+	wind_streaks.initial_velocity_min = 25.0
+	wind_streaks.initial_velocity_max = 35.0
+	wind_streaks.particle_flag_align_y = true # Aligns the long mesh with velocity
+	
+	var streak_mesh = BoxMesh.new()
+	streak_mesh.size = Vector3(0.05, 1.0, 0.05) # Stretched along Y axis
+	
+	var streak_mat = StandardMaterial3D.new()
+	streak_mat.albedo_color = Color(0.8, 0.9, 1.0, 0.3)
+	streak_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	streak_mat.emission_enabled = true
+	streak_mat.emission = Color(0.5, 0.8, 1.0)
+	streak_mat.emission_energy_multiplier = 1.0
+	streak_mesh.material = streak_mat
+	wind_streaks.mesh = streak_mesh
+	
+	var streak_curve = Curve.new()
+	streak_curve.add_point(Vector2(0, 0.2))
+	streak_curve.add_point(Vector2(0.2, 1.0))
+	streak_curve.add_point(Vector2(1, 0.0))
+	wind_streaks.scale_amount_curve = streak_curve
+	
+	container.add_child(wind_streaks)
+	wind_streaks.emitting = true
+	
+	# 2. Expanding Shockwave Ring
+	var ring = MeshInstance3D.new()
+	var torus = TorusMesh.new()
+	torus.inner_radius = 0.8
+	torus.outer_radius = 1.0
+	torus.rings = 32
+	torus.ring_segments = 16
+	ring.mesh = torus
+	ring.rotation.x = PI / 2.0 # Face forward relative to container
+	
+	var ring_mat = StandardMaterial3D.new()
+	ring_mat.albedo_color = Color(0.8, 0.9, 1.0, 0.6)
+	ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	ring_mat.emission_enabled = true
+	ring_mat.emission = Color(0.6, 0.9, 1.0)
+	ring_mat.emission_energy_multiplier = 2.0
+	ring.material_override = ring_mat
+	container.add_child(ring)
+	
+	var tween = create_tween().set_parallel(true)
+	tween.tween_property(ring, "scale", Vector3(5.0, 5.0, 5.0), 0.3).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(ring_mat, "albedo_color:a", 0.0, 0.3).set_trans(Tween.TRANS_QUAD)
+	
+	# 3. Ground Dust Kick-up
+	var dust = CPUParticles3D.new()
+	dust.amount = 40
+	dust.lifetime = 0.8
+	dust.explosiveness = 0.9
+	dust.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	dust.emission_box_extents = Vector3(1.5, 0.1, 0.5)
+	dust.position.y = -1.0 # Down near feet
+	dust.direction = Vector3(0, 0, -1)
+	dust.spread = 20.0
+	dust.initial_velocity_min = 10.0
+	dust.initial_velocity_max = 20.0
+	dust.damping_min = 15.0
+	dust.damping_max = 25.0
+	
+	var dust_mesh = SphereMesh.new()
+	dust_mesh.radius = 0.3
+	dust_mesh.height = 0.6
+	dust_mesh.radial_segments = 8
+	dust_mesh.rings = 4
+	var dust_mat = StandardMaterial3D.new()
+	dust_mat.albedo_color = Color(0.6, 0.5, 0.4, 0.4) # Dust color
+	dust_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dust_mesh.material = dust_mat
+	dust.mesh = dust_mesh
+	
+	var dust_curve = Curve.new()
+	dust_curve.add_point(Vector2(0, 0.5))
+	dust_curve.add_point(Vector2(0.3, 1.0))
+	dust_curve.add_point(Vector2(1, 0.0))
+	dust.scale_amount_curve = dust_curve
+	
+	container.add_child(dust)
+	dust.emitting = true
 	
 	var timer = get_tree().create_timer(1.0)
 	timer.timeout.connect(func(): if is_instance_valid(container): container.queue_free())
 
-func create_drain_visual(start_pos: Vector3, end_pos: Vector3):
-	var distance = start_pos.distance_to(end_pos)
-	var container = Node3D.new()
-	get_tree().root.add_child(container)
-	container.global_position = start_pos
-	var up = Vector3.UP
-	if abs((end_pos - start_pos).normalized().y) > 0.99: up = Vector3.RIGHT
-	container.look_at(end_pos, up)
+func create_drain_visual(start_pos: Vector3, end_pos: Vector3, duration: float = 2.35, hit_path: NodePath = NodePath()):
+	var particles = CPUParticles3D.new()
+	particles.cast_shadow = 0
+	particles.local_coords = false
+	get_tree().root.add_child(particles)
+	particles.global_position = end_pos
 	
-	var beam = MeshInstance3D.new()
-	var cyl = CylinderMesh.new()
-	cyl.top_radius = 0.1
-	cyl.bottom_radius = 0.1
-	cyl.height = distance
-	beam.mesh = cyl
-	beam.position.z = - distance / 2.0
-	beam.rotation.x = PI / 2.0
+	particles.amount = 80
+	particles.lifetime = 0.4
+	particles.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	particles.emission_sphere_radius = 0.1
+	particles.gravity = Vector3.ZERO
+	particles.spread = 0.06
+	particles.scale_amount_min = 0.3
+	particles.scale_amount_max = 5.0
+	
+	var p_mesh = SphereMesh.new()
+	p_mesh.radius = 0.05
+	p_mesh.height = 0.1
 	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0.2, 0.0, 0.3)
+	mat.albedo_color = Color(0.01, 0.0, 0.02)
 	mat.emission_enabled = true
-	mat.emission = Color(0.4, 0.0, 0.6)
-	mat.emission_energy_multiplier = 5.0
-	beam.material_override = mat
-	container.add_child(beam)
+	mat.emission = Color(0.02, 0.0, 0.04)
+	mat.emission_energy_multiplier = 0.5
+	p_mesh.material = mat
+	particles.mesh = p_mesh
 	
-	var tween = container.create_tween()
-	tween.tween_property(beam, "scale:x", 0.0, 0.2)
-	tween.tween_property(beam, "scale:z", 0.0, 0.2)
+	# Shimmer Effect on target
+	var heat_inst = MeshInstance3D.new()
+	var heat_mesh = SphereMesh.new()
+	heat_mesh.radius = 0.8
+	heat_mesh.height = 1.6
+	var heat_mat = ShaderMaterial.new()
+	var shader = Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode unshaded;
+uniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_linear;
+
+void fragment() {
+	float edge = 1.0 - dot(NORMAL, VIEW);
+	float mask = smoothstep(1.0, 0.0, edge);
+	float wobble = sin(TIME * 8.0 + UV.y * 20.0) * cos(TIME * 5.0 + UV.x * 20.0);
+	vec2 uv = SCREEN_UV + (wobble * 0.005 * mask);
+	ALBEDO = texture(screen_texture, uv).rgb;
+}
+"""
+	heat_mat.shader = shader
+	heat_mesh.material = heat_mat
+	heat_inst.mesh = heat_mesh
+	heat_inst.sorting_offset = -10.0
+	particles.add_child(heat_inst)
 	
-	var timer = get_tree().create_timer(0.5)
-	timer.timeout.connect(func(): if is_instance_valid(container): container.queue_free())
+	active_drain_visuals.append({
+		"particles": particles,
+		"hit_path": hit_path,
+		"target_pos": end_pos
+	})
+	
+	var timer = get_tree().create_timer(duration)
+	timer.timeout.connect(func():
+		if is_instance_valid(particles):
+			particles.emitting = false
+			var die_timer = get_tree().create_timer(1.0)
+			die_timer.timeout.connect(func(): if is_instance_valid(particles): particles.queue_free())
+	)
 
 func create_growth_visual(pos: Vector3):
 	var particles = CPUParticles3D.new()
-	particles.amount = 50
-	particles.lifetime = 1.0
+	particles.amount = 120
+	particles.lifetime = 1.5
 	particles.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
-	particles.emission_sphere_radius = 1.5
+	particles.emission_sphere_radius = 2.0
 	particles.gravity = Vector3(0, 5, 0)
+	particles.cast_shadow = 0 # Disable shadows for glowing effect
+	particles.scale_amount_min = 0.5
+	particles.scale_amount_max = 2.0
+	
+	var curve = Curve.new()
+	curve.add_point(Vector2(0, 0.0))
+	curve.add_point(Vector2(0.2, 1.0))
+	curve.add_point(Vector2(1, 0.0))
+	particles.scale_amount_curve = curve
+	
 	var p_mesh = SphereMesh.new()
 	p_mesh.radius = 0.15
 	p_mesh.height = 0.3
@@ -1172,10 +1700,21 @@ func create_growth_visual(pos: Vector3):
 	particles.global_position = pos
 	particles.emitting = true
 	
-	var timer = get_tree().create_timer(1.5)
-	timer.timeout.connect(func(): if is_instance_valid(particles): particles.queue_free())
+	var timer = get_tree().create_timer(2.0)
+	timer.timeout.connect(func():
+		if is_instance_valid(particles):
+			particles.emitting = false
+			await get_tree().create_timer(2.0).timeout
+			if is_instance_valid(particles):
+				particles.queue_free()
+	)
 
 func create_heal_visual(pos: Vector3):
+	var container = Node3D.new()
+	get_tree().root.add_child(container)
+	container.global_position = pos
+	
+	# Particles
 	var particles = CPUParticles3D.new()
 	particles.amount = 40
 	particles.lifetime = 1.0
@@ -1193,9 +1732,36 @@ func create_heal_visual(pos: Vector3):
 	p_mesh.material = p_mat
 	particles.mesh = p_mesh
 	
-	get_tree().root.add_child(particles)
-	particles.global_position = pos
+	# Smooth fade out for particles (shrink to 0)
+	var curve = Curve.new()
+	curve.add_point(Vector2(0, 1.0))
+	curve.add_point(Vector2(0.7, 1.0))
+	curve.add_point(Vector2(1, 0.0))
+	particles.scale_amount_curve = curve
+	
+	container.add_child(particles)
 	particles.emitting = true
 	
-	var timer = get_tree().create_timer(1.5)
-	timer.timeout.connect(func(): if is_instance_valid(particles): particles.queue_free())
+	# Holy Light Beam
+	var beam = SpotLight3D.new()
+	beam.spot_angle = 15.0
+	beam.spot_range = 15.0
+	beam.light_color = Color(1.0, 0.95, 0.6)
+	beam.light_energy = 0.0 # Start invisible
+	beam.position = Vector3(0, 8, 0)
+	beam.rotation_degrees.x = -90 # Point straight down
+	container.add_child(beam)
+	
+	# Tween beam fade in/out
+	var tween = create_tween()
+	tween.tween_property(beam, "light_energy", 15.0, 0.2)
+	tween.tween_property(beam, "light_energy", 0.0, 0.8).set_delay(0.5)
+	
+	# Smoothly stop particles instead of deleting instantly
+	var timer = get_tree().create_timer(1.0)
+	timer.timeout.connect(func():
+		if is_instance_valid(particles):
+			particles.emitting = false
+			var timer2 = get_tree().create_timer(1.0)
+			timer2.timeout.connect(func(): if is_instance_valid(container): container.queue_free())
+	)

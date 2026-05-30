@@ -27,6 +27,7 @@ var flash_timer: Timer = null
 
 var attack_cooldown: float = 0.0
 const ATTACK_INTERVAL: float = 1.0
+var stun_timer: float = 0.0
 
 var nav_agent: NavigationAgent3D
 
@@ -36,7 +37,7 @@ var boss_bar: ProgressBar
 # --- Aggro System ---
 var aggro_target: CharacterBody3D = null
 var aggro_range: float = 20.0
-var attack_range: float = 1.5
+var attack_range: float = 1.2
 var leash_range: float = 40.0
 var aggro_timer: float = 0.0
 const AGGRO_CHECK_INTERVAL: float = 0.5
@@ -60,6 +61,8 @@ func _ready():
 	flash_timer.one_shot = true
 	flash_timer.timeout.connect(_on_flash_timeout)
 	add_child(flash_timer)
+	
+	add_to_group("enemies")
 	
 	_play_move_anim()
 		
@@ -221,7 +224,7 @@ func init_stats(multiplier: float, type: String = "goblin"):
 	dmg *= multiplier
 	spd *= (1.0 + (multiplier - 1.0) * 0.1)
 	
-	scale_factor = min(scale_factor, 4.0)
+	scale_factor = min(scale_factor, 2.0)
 	
 	rpc("sync_stats", type, max_hp, dmg, spd, scale_factor)
 
@@ -234,6 +237,25 @@ func _physics_process(delta):
 		velocity.y -= 19.6 * delta
 	else:
 		velocity.y = 0.0
+		
+	# --- Fall off level check ---
+	if global_position.y < -10.0:
+		if multiplayer.is_server():
+			# Teleport back to the center island from above to "respawn" the exact same enemy
+			global_position = Vector3(randf_range(-2.0, 2.0), 10.0, randf_range(-2.0, 2.0))
+			velocity = Vector3.ZERO
+			knockback_velocity = Vector3.ZERO
+		return
+		
+	if stun_timer > 0.0:
+		stun_timer -= delta
+		velocity.x = 0
+		velocity.z = 0
+		if knockback_velocity.length() > 0.1:
+			velocity += knockback_velocity
+			knockback_velocity = knockback_velocity.lerp(Vector3.ZERO, 10.0 * delta)
+		move_and_slide()
+		return
 	
 	if has_reached_base:
 		move_and_slide()
@@ -256,9 +278,14 @@ func _physics_process(delta):
 	
 	# Check if we reached our target
 	var is_at_target = false
-	if nav_agent.is_navigation_finished():
-		is_at_target = true
-	elif targeting_player and global_position.distance_to(nav_target) <= attack_range:
+	var current_attack_range = attack_range * $Visuals.scale.x
+	
+	if targeting_player:
+		var dist_h = Vector2(global_position.x, global_position.z).distance_to(Vector2(nav_target.x, nav_target.z))
+		var dist_v = abs(global_position.y - nav_target.y)
+		if dist_h <= current_attack_range and dist_v <= 1.2 * $Visuals.scale.y:
+			is_at_target = true
+	elif nav_agent.is_navigation_finished():
 		is_at_target = true
 		
 	if is_at_target:
@@ -283,14 +310,29 @@ func _physics_process(delta):
 			attack_cooldown = ATTACK_INTERVAL
 			_perform_attack(targeting_player)
 			
+		# Handle idle animation if not attacking
+		if animation_player and animation_player.current_animation != "attack" and animation_player.has_animation("idle"):
+			if animation_player.current_animation != "idle":
+				animation_player.play("idle")
+			
 		return
 	else:
-		attack_cooldown = 0.0
 		has_reached_base = false
+		attack_cooldown -= delta
 	
 	var next_path_position = nav_agent.get_next_path_position()
 	var dir = global_position.direction_to(next_path_position)
 	dir.y = 0
+	
+	# Separation force
+	var separation = Vector3.ZERO
+	for enemy in get_tree().get_nodes_in_group("enemies"):
+		if enemy != self and is_instance_valid(enemy):
+			var dist = global_position.distance_to(enemy.global_position)
+			if dist < 1.2:
+				separation += global_position.direction_to(enemy.global_position) * -1.0 * (1.2 - dist)
+	
+	dir += separation
 	
 	if dir.length_squared() > 0.001:
 		dir = dir.normalized()
@@ -299,6 +341,10 @@ func _physics_process(delta):
 		
 	velocity.x = dir.x * speed
 	velocity.z = dir.z * speed
+	
+	# Play walking animation
+	if animation_player and animation_player.current_animation != "attack":
+		_play_move_anim()
 	
 	if knockback_velocity.length() > 0.1:
 		velocity += knockback_velocity
@@ -354,9 +400,15 @@ func _perform_attack(targeting_player: bool):
 	rpc("play_attack_anim_and_sound", targeting_player)
 	
 	if targeting_player and aggro_target and is_instance_valid(aggro_target):
-		if aggro_target.has_method("take_damage"):
-			var push_dir = global_position.direction_to(aggro_target.global_position)
-			aggro_target.take_damage(damage, push_dir)
+		var dist_h = Vector2(global_position.x, global_position.z).distance_to(Vector2(aggro_target.global_position.x, aggro_target.global_position.z))
+		var dist_v = abs(global_position.y - aggro_target.global_position.y)
+		var current_attack_range = attack_range * $Visuals.scale.x
+		
+		# Give a small buffer (0.5) for the hit registering in case player is moving away
+		if dist_h <= current_attack_range + 0.5 and dist_v <= 1.8 * $Visuals.scale.y:
+			if aggro_target.has_method("take_damage"):
+				var push_dir = global_position.direction_to(aggro_target.global_position)
+				aggro_target.take_damage(damage, push_dir)
 	else:
 		# Attack base
 		var base = get_tree().root.get_node_or_null("Main/BaseCristal")
@@ -401,6 +453,12 @@ func take_damage(amount, knockback_dir: Vector3 = Vector3.ZERO):
 	
 	if health <= 0:
 		die()
+
+@rpc("call_local", "authority", "reliable")
+func apply_stun(duration: float):
+	stun_timer = max(stun_timer, duration)
+	if animation_player:
+		animation_player.play("idle")
 
 func die():
 	is_dead = true

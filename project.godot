@@ -10,7 +10,7 @@ config_version=5
 
 [application]
 
-config/name="Plasma Multiplayer"
+config/name="Myr Quest"
 run/main_scene="res://scenes/Lobby.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 

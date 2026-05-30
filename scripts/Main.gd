@@ -314,6 +314,9 @@ func _setup_audio_buses():
 			AudioServer.add_bus()
 			idx = AudioServer.get_bus_count() - 1
 			AudioServer.set_bus_name(idx, bus_name)
+			
+	# Default music volume to 0
+	AudioServer.set_bus_volume_db(AudioServer.get_bus_index("Music"), -80.0)
 
 func _setup_new_ui():
 	# Hide old UI elements
