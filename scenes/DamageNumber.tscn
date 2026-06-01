@@ -1,0 +1,14 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/DamageNumber.gd" id="1_dmg"]
+
+[node name="DamageNumber" type="Label3D"]
+pixel_size = 0.01
+billboard = 1
+no_depth_test = true
+render_priority = 10
+outline_render_priority = 0
+text = "0"
+font_size = 64
+outline_size = 12
+script = ExtResource("1_dmg")

@@ -1,7 +1,7 @@
 # Helper script to launch 2 instances of the project side-by-side to test multiplayer locally.
 
 $godotPath = "godot"
-$projectPath = "c:\Projekte\mtg"
+$projectPath = "C:\Users\marvi\Projekte\mtg"
 
 Write-Host "Starting Instance 1 (Host/Player 1)..." -ForegroundColor Green
 Start-Process -FilePath $godotPath -ArgumentList "--path", "`"$projectPath`""

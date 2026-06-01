@@ -93,6 +93,26 @@ func _ready():
 	
 	$MultiplayerSpawner.add_spawnable_scene("res://scenes/Player.tscn")
 	
+	# Setup Projectiles Spawner dynamically
+	var proj_container = Node3D.new()
+	proj_container.name = "ProjectilesContainer"
+	add_child(proj_container)
+	var proj_spawner = MultiplayerSpawner.new()
+	proj_spawner.name = "ProjectilesSpawner"
+	proj_spawner.spawn_path = proj_container.get_path()
+	proj_spawner.add_spawnable_scene("res://scenes/Fireball.tscn")
+	add_child(proj_spawner)
+	
+	# Setup Pickups Spawner dynamically
+	var pickup_container = Node3D.new()
+	pickup_container.name = "PickupsContainer"
+	add_child(pickup_container)
+	var pickup_spawner = MultiplayerSpawner.new()
+	pickup_spawner.name = "PickupsSpawner"
+	pickup_spawner.spawn_path = pickup_container.get_path()
+	pickup_spawner.add_spawnable_scene("res://scenes/ManaCrystal.tscn")
+	add_child(pickup_spawner)
+	
 	# Server instantiates player scenes; client nodes are spawned by MultiplayerSpawner
 	if multiplayer.is_server():
 		for id in GameManager.players.keys():
@@ -189,9 +209,11 @@ func spawn_enemy():
 	
 	# Delay init_stats slightly so clients have time to instantiate the node for RPC
 	var multiplier = 1.0 + (total_game_time / 300.0)
+	var enemy_id = enemy.get_instance_id()
 	get_tree().create_timer(0.1).timeout.connect(func(): 
-		if is_instance_valid(enemy): 
-			enemy.init_stats(multiplier, type)
+		var e = instance_from_id(enemy_id)
+		if is_instance_valid(e): 
+			e.init_stats(multiplier, type)
 	)
 
 func setup_world():

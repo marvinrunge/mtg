@@ -5,19 +5,148 @@ var damage: float = 40.0
 var direction: Vector3 = Vector3.FORWARD
 var multiplayer_id: int = 1
 var has_exploded: bool = false
+var charge_mult: float = 1.0
 
-func _ready():
+var inner_core: MeshInstance3D
+var outer_core: MeshInstance3D
+var heat_shimmer: MeshInstance3D
+var light: OmniLight3D
+var collision_shape: CollisionShape3D
+
+func _ready() -> void:
 	body_entered.connect(_on_body_entered)
 	var timer = Timer.new()
 	timer.wait_time = 5.0
 	timer.autostart = true
 	timer.timeout.connect(queue_free)
 	add_child(timer)
+	
+	_create_visuals()
 
-func _physics_process(delta):
+func _create_visuals() -> void:
+	collision_shape = CollisionShape3D.new()
+	var sphere = SphereShape3D.new()
+	sphere.radius = 0.15
+	collision_shape.shape = sphere
+	add_child(collision_shape)
+	
+	# Inner Core
+	inner_core = MeshInstance3D.new()
+	var mesh = SphereMesh.new()
+	mesh.radius = 0.35
+	mesh.height = 0.7
+	inner_core.mesh = mesh
+	var mat = StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.8, 0.2)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.9, 0.4)
+	mat.emission_energy_multiplier = 8.0
+	inner_core.material_override = mat
+	add_child(inner_core)
+	
+	# Outer Core
+	outer_core = MeshInstance3D.new()
+	var outer_mesh = SphereMesh.new()
+	outer_mesh.radius = 0.55
+	outer_mesh.height = 1.1
+	outer_core.mesh = outer_mesh
+	var outer_mat = StandardMaterial3D.new()
+	outer_mat.albedo_color = Color(1.0, 0.4, 0.0, 0.5)
+	outer_mat.emission_enabled = true
+	outer_mat.emission = Color(1.0, 0.2, 0.0)
+	outer_mat.emission_energy_multiplier = 3.0
+	outer_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	outer_core.material_override = outer_mat
+	add_child(outer_core)
+	
+	light = OmniLight3D.new()
+	light.light_color = Color(1.0, 0.4, 0.0)
+	add_child(light)
+	
+	# Heat Shimmer Effect
+	heat_shimmer = MeshInstance3D.new()
+	var heat_mesh = SphereMesh.new()
+	heat_mesh.radius = 0.65
+	heat_mesh.height = 1.3
+	var heat_mat = ShaderMaterial.new()
+	var shader = Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode unshaded;
+uniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_linear;
+
+void fragment() {
+	float edge = 1.0 - dot(NORMAL, VIEW);
+	float mask = smoothstep(1.0, 0.0, edge);
+	float wobble = sin(TIME * 8.0 + UV.y * 20.0) * cos(TIME * 5.0 + UV.x * 20.0);
+	vec2 uv = SCREEN_UV + (wobble * 0.001 * mask);
+	ALBEDO = texture(screen_texture, uv).rgb;
+}
+"""
+	heat_mat.shader = shader
+	heat_mesh.material = heat_mat
+	heat_shimmer.mesh = heat_mesh
+	heat_shimmer.sorting_offset = -10.0
+	add_child(heat_shimmer)
+	
+	# Trail Particles
+	var particles = CPUParticles3D.new()
+	particles.amount = 60
+	particles.lifetime = 0.6
+	particles.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	particles.emission_sphere_radius = 0.4
+	particles.gravity = Vector3(0, 1.5, 0)
+	particles.initial_velocity_min = 0.5
+	particles.initial_velocity_max = 1.5
+	
+	var curve = Curve.new()
+	curve.add_point(Vector2(0, 1.5))
+	curve.add_point(Vector2(1, 0.0))
+	particles.scale_amount_curve = curve
+	
+	var grad = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.1, 0.6, 1.0])
+	grad.colors = PackedColorArray([Color(1, 1, 0.8), Color(1, 0.5, 0), Color(0.8, 0.1, 0), Color(0.2, 0.2, 0.2, 0)])
+	particles.color_ramp = grad
+	
+	var p_mesh = SphereMesh.new()
+	p_mesh.radius = 0.15
+	p_mesh.height = 0.3
+	p_mesh.radial_segments = 8
+	p_mesh.rings = 4
+	var p_mat = StandardMaterial3D.new()
+	p_mat.vertex_color_use_as_albedo = true
+	p_mat.albedo_color = Color(1.0, 1.0, 1.0)
+	p_mat.emission_enabled = true
+	p_mat.emission = Color(1.0, 0.5, 0.0)
+	p_mat.emission_energy_multiplier = 2.0
+	p_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	p_mesh.material = p_mat
+	particles.mesh = p_mesh
+	add_child(particles)
+	
+	_animate_spawn()
+
+func _animate_spawn() -> void:
+	collision_shape.scale = Vector3.ONE * min(charge_mult, 3.0)
+	var start_scale = Vector3(0.01, 0.01, 0.01)
+	inner_core.scale = start_scale
+	outer_core.scale = start_scale
+	heat_shimmer.scale = start_scale
+	light.omni_range = 0.0
+	light.light_energy = 0.0
+	
+	var tween = create_tween().set_parallel(true)
+	tween.tween_property(inner_core, "scale", Vector3.ONE * charge_mult, 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(outer_core, "scale", Vector3.ONE * charge_mult, 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(heat_shimmer, "scale", Vector3.ONE * charge_mult, 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(light, "omni_range", 10.0 * charge_mult, 0.2)
+	tween.tween_property(light, "light_energy", 5.0 * charge_mult, 0.2)
+
+func _physics_process(delta: float) -> void:
 	position += direction * speed * delta
 
-func _on_body_entered(body):
+func _on_body_entered(body: Node3D) -> void:
 	if has_exploded: return
 	has_exploded = true
 	

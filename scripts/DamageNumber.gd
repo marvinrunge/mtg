@@ -1,32 +1,26 @@
 extends Label3D
 
-var velocity = Vector3(0, 2.0, 0)
-var gravity = 3.0
-var lifetime = 1.0
-var current_time = 0.0
+@export var popup_height: float = 2.0
+@export var lifetime: float = 1.0
+@export var random_spread: float = 1.0
 
-func _ready():
-	# Randomize initial horizontal velocity slightly
-	velocity.x = randf_range(-1.0, 1.0)
-	velocity.z = randf_range(-1.0, 1.0)
-	
-	billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	pixel_size = 0.01
-	font_size = 64
-	outline_size = 12
-	outline_render_priority = 0
-	render_priority = 10
-	no_depth_test = true
+func _ready() -> void:
+	# Defer the tween so the spawner has time to set our global_position first!
+	call_deferred("_start_tween")
 
-func _process(delta):
-	current_time += delta
-	if current_time >= lifetime:
-		queue_free()
-		return
-		
-	velocity.y -= gravity * delta
-	position += velocity * delta
+func _start_tween() -> void:
+	# Randomize initial horizontal drift
+	var random_offset = Vector3(
+		randf_range(-random_spread, random_spread), 
+		0, 
+		randf_range(-random_spread, random_spread)
+	)
+	var target_pos = position + random_offset + Vector3(0, popup_height, 0)
 	
+	var tween = create_tween().set_parallel(true)
+	# Float up and drift
+	tween.tween_property(self, "position", target_pos, lifetime).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	# Fade out
-	var alpha = 1.0 - (current_time / lifetime)
-	modulate.a = alpha
+	tween.tween_property(self, "modulate:a", 0.0, lifetime).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	
+	tween.chain().tween_callback(queue_free)

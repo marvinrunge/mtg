@@ -6,8 +6,8 @@ const IDLE_SCENE = preload("res://meshes/characters/shared/idle1.fbx")
 const DEATH_SCENE = preload("res://meshes/characters/shared/hard landing.fbx")
 const ATTACK_SCENE = preload("res://meshes/characters/shared/Punching (1).fbx")
 
-const MANA_CRYSTAL_SCRIPT = preload("res://scripts/ManaCrystal.gd")
-const DAMAGE_NUMBER_SCRIPT = preload("res://scripts/DamageNumber.gd")
+const MANA_CRYSTAL_SCENE = preload("res://scenes/ManaCrystal.tscn")
+const DAMAGE_NUMBER_SCENE = preload("res://scenes/DamageNumber.tscn")
 
 @export var base_speed: float = 3.0
 @export var base_damage: float = 5.0
@@ -42,9 +42,34 @@ var leash_range: float = 40.0
 var aggro_timer: float = 0.0
 const AGGRO_CHECK_INTERVAL: float = 0.5
 
-@onready var animation_player = $Visuals/Goblin/AnimationPlayer
+@export var animation_player: AnimationPlayer
 
-func _ready():
+func _find_animation_player(node: Node) -> AnimationPlayer:
+	for child in node.get_children():
+		if child is AnimationPlayer:
+			return child
+		var res = _find_animation_player(child)
+		if res: return res
+	return null
+var anim_tree: AnimationTree
+var anim_state: AnimationNodeStateMachinePlayback
+var current_animation: String = ""
+var root_motion_track_path: NodePath
+
+
+func _ready() -> void:
+	if not animation_player:
+		animation_player = _find_animation_player(self)
+		
+	var sync = MultiplayerSynchronizer.new()
+	var config = SceneReplicationConfig.new()
+	config.add_property(NodePath(".:position"))
+	config.add_property(NodePath(".:rotation"))
+	config.add_property(NodePath(".:health"))
+	config.add_property(NodePath(".:current_animation"))
+	sync.replication_config = config
+	add_child(sync)
+	
 	health = base_health
 	speed = base_speed
 	damage = base_damage
@@ -72,15 +97,13 @@ func _ready():
 	add_child(nav_agent)
 
 func _play_move_anim() -> void:
-	if not animation_player: return
-	if speed > 4.0 and animation_player.has_animation("running"):
-		animation_player.play("running")
-	elif animation_player.has_animation("walking"):
-		animation_player.play("walking")
-	elif animation_player.has_animation("running"):
-		animation_player.play("running")
+	if not is_instance_valid(anim_state): return
+	if speed > 4.0:
+		anim_state.travel("running")
+	else:
+		anim_state.travel("walking")
 
-func setup_animations():
+func setup_animations() -> void:
 	if not animation_player: return
 	
 	var anim_library = animation_player.get_animation_library("")
@@ -130,7 +153,6 @@ func setup_animations():
 			anim_library.add_animation("death", anim)
 		d_root.queue_free()
 
-	# Attack
 	if ATTACK_SCENE:
 		var a_root = ATTACK_SCENE.instantiate()
 		var a_ap = a_root.get_node_or_null("AnimationPlayer")
@@ -140,12 +162,38 @@ func setup_animations():
 			_make_animation_stationary(anim)
 			anim_library.add_animation("attack", anim)
 		a_root.queue_free()
+		
+	if animation_player:
+		if is_instance_valid(anim_tree):
+			anim_tree.queue_free()
+		anim_tree = AnimationTree.new()
+		anim_tree.anim_player = animation_player.get_path()
+		var state_machine = AnimationNodeStateMachine.new()
+		
+		for a_name in ["idle", "running", "death", "attack", "walking"]:
+			if animation_player.has_animation(a_name):
+				var node = AnimationNodeAnimation.new()
+				node.animation = a_name
+				state_machine.add_node(a_name, node)
+		
+		for a_name in ["idle", "running", "death", "attack", "walking"]:
+			for t_name in ["idle", "running", "death", "attack", "walking"]:
+				if a_name != t_name and state_machine.has_node(a_name) and state_machine.has_node(t_name):
+					var trans = AnimationNodeStateMachineTransition.new()
+					trans.xfade_time = 0.15
+					state_machine.add_transition(a_name, t_name, trans)
+			
+		anim_tree.tree_root = state_machine
+		anim_tree.active = true
+		add_child(anim_tree)
+		anim_state = anim_tree.get("parameters/playback")
+		if is_instance_valid(anim_state): anim_state.start("idle")
 
-func _make_animation_stationary(anim: Animation):
+func _make_animation_stationary(anim: Animation) -> void:
 	for i in range(anim.get_track_count()):
 		var path = str(anim.track_get_path(i))
-		# TYPE_POSITION_3D is 1 in Godot 4
 		if "mixamorig_Hips" in path and anim.track_get_type(i) == 1:
+			root_motion_track_path = NodePath(path)
 			var start_val = anim.track_get_key_value(i, 0) if anim.track_get_key_count(i) > 0 else Vector3.ZERO
 			for key_idx in range(anim.track_get_key_count(i)):
 				var val = anim.track_get_key_value(i, key_idx)
@@ -155,7 +203,7 @@ func _make_animation_stationary(anim: Animation):
 					anim.track_set_key_value(i, key_idx, val)
 
 @rpc("call_local", "authority", "reliable")
-func sync_stats(type: String, max_hp: float, dmg: float, spd: float, scale_factor: float = 1.0):
+func sync_stats(type: String, max_hp: float, dmg: float, spd: float, scale_factor: float = 1.0) -> void:
 	enemy_type = type
 	base_health = max_hp
 	health = max_hp
@@ -163,7 +211,7 @@ func sync_stats(type: String, max_hp: float, dmg: float, spd: float, scale_facto
 	speed = spd
 	
 	$Visuals.scale = Vector3(scale_factor, scale_factor, scale_factor)
-	$Visuals.position.y = 0.0
+	
 	$CollisionShape3D.scale = Vector3(scale_factor, scale_factor, scale_factor)
 	$CollisionShape3D.position.y = 0.5 * scale_factor
 	
@@ -173,7 +221,7 @@ func sync_stats(type: String, max_hp: float, dmg: float, spd: float, scale_facto
 	# Update animation based on new speed
 	_play_move_anim()
 
-func setup_boss_ui():
+func setup_boss_ui() -> void:
 	var canvas = CanvasLayer.new()
 	add_child(canvas)
 	
@@ -196,7 +244,7 @@ func setup_boss_ui():
 	boss_bar.add_theme_stylebox_override("fill", sb)
 	canvas.add_child(boss_bar)
 
-func init_stats(multiplier: float, type: String = "goblin"):
+func init_stats(multiplier: float, type: String = "goblin") -> void:
 	var max_hp = 50.0
 	var spd = 3.0
 	var dmg = 5.0
@@ -228,7 +276,7 @@ func init_stats(multiplier: float, type: String = "goblin"):
 	
 	rpc("sync_stats", type, max_hp, dmg, spd, scale_factor)
 
-func _physics_process(delta):
+func _physics_process(delta: float) -> void:
 	if not multiplayer.is_server() or is_dead:
 		return
 	
@@ -311,9 +359,10 @@ func _physics_process(delta):
 			_perform_attack(targeting_player)
 			
 		# Handle idle animation if not attacking
-		if animation_player and animation_player.current_animation != "attack" and animation_player.has_animation("idle"):
-			if animation_player.current_animation != "idle":
-				animation_player.play("idle")
+		if animation_player and current_animation != "attack" and animation_player.has_animation("idle"):
+			if current_animation != "idle":
+				if is_instance_valid(anim_state): anim_state.travel("idle")
+				current_animation = "idle"
 			
 		return
 	else:
@@ -343,7 +392,8 @@ func _physics_process(delta):
 	velocity.z = dir.z * speed
 	
 	# Play walking animation
-	if animation_player and animation_player.current_animation != "attack":
+	var is_attacking = current_animation == "attack" and is_instance_valid(anim_state) and (anim_state.get_current_node() != "attack" or anim_state.get_current_play_position() < anim_state.get_current_length() - 0.1)
+	if animation_player and not is_attacking:
 		_play_move_anim()
 	
 	if knockback_velocity.length() > 0.1:
@@ -394,7 +444,7 @@ func gain_aggro(attacker: Node) -> void:
 	if attacker is CharacterBody3D and is_instance_valid(attacker):
 		aggro_target = attacker
 
-func _perform_attack(targeting_player: bool):
+func _perform_attack(targeting_player: bool) -> void:
 	if not multiplayer.is_server() or is_dead: return
 	
 	rpc("play_attack_anim_and_sound", targeting_player)
@@ -418,12 +468,9 @@ func _perform_attack(targeting_player: bool):
 			base.health = max(base.health - damage, 0.0)
 
 @rpc("call_local", "any_peer", "reliable")
-func play_attack_anim_and_sound(targeting_player: bool):
-	if animation_player:
-		if animation_player.has_animation("attack"):
-			animation_player.play("attack", -1, 1.5)
-		else:
-			animation_player.play("idle", -1, 1.5)
+func play_attack_anim_and_sound(targeting_player: bool) -> void:
+	if is_instance_valid(anim_state):
+		anim_state.travel("attack")
 			
 	var punch_sound = "res://sounds/punch" + str(randi() % 4 + 1) + ".wav"
 	var audio = AudioStreamPlayer3D.new()
@@ -443,7 +490,7 @@ func play_attack_anim_and_sound(targeting_player: bool):
 		audio2.play()
 		audio2.finished.connect(audio2.queue_free)
 
-func take_damage(amount, knockback_dir: Vector3 = Vector3.ZERO):
+func take_damage(amount: float, knockback_dir: Vector3 = Vector3.ZERO) -> void:
 	if not multiplayer.is_server() or is_dead: return
 	health -= amount
 	
@@ -455,12 +502,12 @@ func take_damage(amount, knockback_dir: Vector3 = Vector3.ZERO):
 		die()
 
 @rpc("call_local", "authority", "reliable")
-func apply_stun(duration: float):
+func apply_stun(duration: float) -> void:
 	stun_timer = max(stun_timer, duration)
-	if animation_player:
-		animation_player.play("idle")
+	if is_instance_valid(anim_state):
+		anim_state.travel("idle")
 
-func die():
+func die() -> void:
 	is_dead = true
 	$CollisionShape3D.set_deferred("disabled", true)
 	rpc("play_death_anim")
@@ -476,28 +523,32 @@ func die():
 	else:
 		queue_free()
 
-func drop_mana_crystal():
-	var crystal = Area3D.new()
-	crystal.set_script(MANA_CRYSTAL_SCRIPT)
+func drop_mana_crystal() -> void:
+	if not is_multiplayer_authority(): return
+	var crystal = MANA_CRYSTAL_SCENE.instantiate()
 	var main = get_tree().root.get_node_or_null("Main")
 	if main:
-		main.add_child(crystal)
+		var container = main.get_node_or_null("PickupsContainer")
+		if container:
+			container.add_child(crystal, true)
+		else:
+			main.add_child(crystal, true)
 		crystal.global_position = global_position + Vector3(0, 0.5, 0)
 
 @rpc("call_local", "authority", "reliable")
-func play_death_anim():
-	if animation_player and animation_player.has_animation("death"):
-		animation_player.play("death")
+func play_death_anim() -> void:
+	if is_instance_valid(anim_state):
+		anim_state.travel("death")
 
 @rpc("call_local", "any_peer", "reliable")
-func hit_reaction(amount: float, current_health: float = -1):
+func hit_reaction(amount: float, current_health: float = -1.0) -> void:
 	if is_dead: return
 	
 	if boss_bar and current_health != -1:
 		boss_bar.value = current_health
 	
 	# Damage Number
-	var label = DAMAGE_NUMBER_SCRIPT.new()
+	var label = DAMAGE_NUMBER_SCENE.instantiate()
 	label.text = str(round(amount))
 	label.modulate = Color(1, 0.2, 0.2) if amount >= 20 else Color(1, 1, 1)
 	get_tree().root.add_child(label)
@@ -517,7 +568,7 @@ func hit_reaction(amount: float, current_health: float = -1):
 			mesh_inst.material_override = flash_mat
 			flash_timer.start()
 
-func _on_flash_timeout():
+func _on_flash_timeout() -> void:
 	if original_material:
 		var mesh_inst = _find_mesh_instance($Visuals)
 		if mesh_inst:
