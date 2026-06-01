@@ -343,7 +343,7 @@ func create_fireball(start_pos: Vector3, target_pos: Vector3, mana_amount: float
 			main.add_child(container)
 			var spawner = MultiplayerSpawner.new()
 			spawner.name = "ProjectilesSpawner"
-			spawner.spawn_path = container.get_path()
+			spawner.spawn_path = NodePath("../ProjectilesContainer")
 			spawner.add_spawnable_scene("res://scenes/Fireball.tscn")
 			main.add_child(spawner)
 		container.add_child(fireball, true)

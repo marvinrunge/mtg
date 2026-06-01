@@ -99,7 +99,7 @@ func _ready():
 	add_child(proj_container)
 	var proj_spawner = MultiplayerSpawner.new()
 	proj_spawner.name = "ProjectilesSpawner"
-	proj_spawner.spawn_path = proj_container.get_path()
+	proj_spawner.spawn_path = NodePath("../ProjectilesContainer")
 	proj_spawner.add_spawnable_scene("res://scenes/Fireball.tscn")
 	add_child(proj_spawner)
 	
@@ -109,7 +109,7 @@ func _ready():
 	add_child(pickup_container)
 	var pickup_spawner = MultiplayerSpawner.new()
 	pickup_spawner.name = "PickupsSpawner"
-	pickup_spawner.spawn_path = pickup_container.get_path()
+	pickup_spawner.spawn_path = NodePath("../PickupsContainer")
 	pickup_spawner.add_spawnable_scene("res://scenes/ManaCrystal.tscn")
 	add_child(pickup_spawner)
 	
